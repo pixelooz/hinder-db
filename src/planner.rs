@@ -2,16 +2,19 @@ use crate::{
     catalog::manager::CatalogManager,
     error::Error,
     execution::{
-        executor::Executor, filter::FilterExecutor, iterator::BpTreeIterator,
+        create::{CreateExecutor, CreateOperation},
+        executor::Executor,
+        filter::FilterExecutor,
+        iterator::BpTreeIterator,
         seq_scan::SeqScanExecutor,
     },
     planner::bound_expr::BoundExpr,
     relation::{
-        schema::Schema,
+        schema::{Column, Schema},
         types::{DataType, Value},
     },
     sql::{
-        ast::{BinaryOperator, Expr, Select, Statement, TableReference},
+        ast::{BinaryOperator, CreateIndex, CreateTable, Expr, Select, Statement, TableReference},
         parser::AstLiteral,
     },
 };
@@ -36,16 +39,46 @@ impl<'a> Planner<'a> {
     pub fn plan_statement(&self, stmt: Statement) -> Result<Box<dyn Executor>, Error> {
         use Statement::*;
         match stmt {
-            Select(select) => self.plan_select(select),
+            CreateTable(stmt) => self.plan_create_table(stmt),
+            CreateIndex(stmt) => self.plan_create_index(stmt),
+            Select(stmt) => self.plan_select(stmt),
+
             _ => Err(Error::NotImplementedYet(
                 "only select statements are currently supported by the planner".into(),
             )),
         }
     }
 
+    /// Translates the Ast `CreateTable` node into a logical `Schema` and routes it to
+    /// the `CreateExecutor`
+    fn plan_create_table(&self, stmt: CreateTable) -> Result<Box<dyn Executor>, Error> {
+        let mut columns = Vec::with_capacity(stmt.columns.len());
+        for col_def in stmt.columns {
+            columns.push(Column::new(col_def.name, col_def.data_type, col_def.length));
+        }
+        let schema = Schema::new(columns);
+
+        let operation = CreateOperation::Table {
+            table_name: stmt.table_name,
+            schema,
+        };
+        Ok(Box::new(CreateExecutor::new(operation)))
+    }
+
+    /// Converts the `CreateIndex` Ast and passes it to the `CreateExecutor`.
+    fn plan_create_index(&self, stmt: CreateIndex) -> Result<Box<dyn Executor>, Error> {
+        let operation = CreateOperation::Index {
+            table_name: stmt.table_name,
+            index_name: stmt.index_name,
+            is_unique: stmt.unique,
+            column_name: stmt.column_name,
+        };
+        Ok(Box::new(CreateExecutor::new(operation)))
+    }
+
     /// Plan a SELECT query, building a pipeline of SeqScan -> Filter.
-    fn plan_select(&self, select: Select) -> Result<Box<dyn Executor>, Error> {
-        let table_name = match select.from {
+    fn plan_select(&self, stmt: Select) -> Result<Box<dyn Executor>, Error> {
+        let table_name = match stmt.from {
             Some(TableReference::BaseTable { name, .. }) => name,
             Some(TableReference::Join(_)) => {
                 return Err(Error::NotImplementedYet(
@@ -66,7 +99,7 @@ impl<'a> Planner<'a> {
         let mut pipeline: Box<dyn Executor> =
             Box::new(SeqScanExecutor::new(iterator, schema.clone()));
 
-        if let Some(where_expr) = select.where_clause {
+        if let Some(where_expr) = stmt.where_clause {
             let bound_predicate = self.bind_expr(&where_expr, schema, Some(DataType::Boolean))?;
             pipeline = Box::new(FilterExecutor::new(pipeline, bound_predicate));
         }

@@ -335,7 +335,7 @@ mod tests {
 
     fn get_temp_wal_path(name: &str) -> PathBuf {
         let mut path = PathBuf::from("/Volumes/External T7/");
-        path.push(format!("smol-db_test_wal_{}.log", name));
+        path.push(format!("shrimp-db_test_wal_{}.log", name));
         let _ = fs::remove_file(&path);
         path
     }

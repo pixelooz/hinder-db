@@ -11,7 +11,7 @@ use crate::error::Error;
 /// Size of an element in the index/offset array (u16).
 pub const SLOT_ELEM_SIZE: usize = 2;
 
-/// Size of any page in smol-db, around 8KiB. We don't have true slotted page architecture,
+/// Size of any page in shrimp-db, around 8KiB. We don't have true slotted page architecture,
 /// where larger pages are written to another page which the slotted/normal leaf node just
 /// holds a pointer to (I'll try that later).
 pub const PAGE_SIZE: usize = 8192;
@@ -995,14 +995,14 @@ mod tests {
         write_cursor.write_u16(u16::MAX);
         write_cursor.write_u32(123456789);
         write_cursor.write_u64(u64::MAX);
-        write_cursor.write_bytes(b"smol-db");
+        write_cursor.write_bytes(b"shrimp-db");
 
         let mut read_cursor = ByteCursor::new(&mut buffer);
         assert_eq!(read_cursor.read_u8(), 42);
         assert_eq!(read_cursor.read_u16(), u16::MAX);
         assert_eq!(read_cursor.read_u32(), 123456789);
         assert_eq!(read_cursor.read_u64(), u64::MAX);
-        assert_eq!(read_cursor.read_bytes(7), b"smol-db");
+        assert_eq!(read_cursor.read_bytes(7), b"shrimp-db");
     }
 
     /// Validates round-trip encoding and decoding of an empty LeafNode without

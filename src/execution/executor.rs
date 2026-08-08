@@ -1,3 +1,5 @@
+use parking_lot::{Mutex, RwLock};
+
 use crate::{
     catalog::manager::CatalogManager,
     error::Error,
@@ -13,7 +15,7 @@ pub struct ExecutionContext<'a> {
     pub buffer_pool: &'a BufferPool,
 
     /// A reference to the catalog for O(1) metadata lookups.
-    pub catalog: &'a CatalogManager,
+    pub catalog: &'a RwLock<CatalogManager>,
 
     /// A reusable buffer to avoid heap allocation when fetching raw bytes
     /// from pages, defaults as 2KiB.
@@ -28,16 +30,16 @@ pub struct ExecutionContext<'a> {
 
     /// Mutable reference to the Wal for logging stateful operations like
     /// insert, update, stuff.
-    pub wal_manager: &'a mut WalManager,
+    pub wal_manager: &'a Mutex<WalManager>,
 }
 
 impl<'a> ExecutionContext<'a> {
     /// Initializes a new `ExecutionContext`.
     pub fn new(
         pool: &'a BufferPool,
-        catalog: &'a CatalogManager,
+        catalog: &'a RwLock<CatalogManager>,
         txn_id: u64,
-        wal_manager: &'a mut WalManager,
+        wal_manager: &'a Mutex<WalManager>,
     ) -> Self {
         Self {
             buffer_pool: pool,

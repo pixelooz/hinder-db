@@ -185,7 +185,7 @@ mod tests {
             Value::BigInt(123456789012345),
             Value::Int(-32),
             Value::Boolean(true),
-            Value::Varchar("kibodb".to_string()),
+            Value::Varchar("shrimp-db".to_string()),
         ]);
         let mut buffer = Cursor::new(Vec::new());
         original_tuple.encode(&schema, &mut buffer)?;
@@ -212,7 +212,7 @@ mod tests {
             Value::BigInt(123456789012345),
             Value::Int(100),
             Value::Null,
-            Value::Varchar("kibodb".to_string()),
+            Value::Varchar("shrimp-db".to_string()),
         ]);
         let mut buffer = Cursor::new(Vec::new());
         original_tuple.encode(&schema, &mut buffer)?;

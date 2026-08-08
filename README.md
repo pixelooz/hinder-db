@@ -1,4 +1,4 @@
-# smol-db
+# Shrimp-Db
 A simplified version of a relational database, built for educational purposes.
 
 ## Expected Features

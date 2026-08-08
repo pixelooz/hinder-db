@@ -27,10 +27,10 @@ pub const SYS_INDEXES_ROOT_ID: PageId = PageId(3);
 /// Represents the physical and logical properties of a secondary index.
 #[derive(Debug, Clone)]
 pub struct IndexMeta {
-    pub index_name: String,
-    pub col_name: String,
     pub root_page_id: PageId,
+    pub index_name: String,
     pub is_unique: bool,
+    pub column_name: String,
 }
 
 /// The in-memory metadata cache for the entire database.
@@ -76,7 +76,7 @@ impl CatalogManager {
 
     /// Bootstraps the catalog from disk. If the database is empty, it allocates and
     /// initializes the system catalog pages.
-    pub fn bootstrap(&mut self, pool: &mut BufferPool) -> Result<(), Error> {
+    pub fn bootstrap(&mut self, pool: &BufferPool) -> Result<(), Error> {
         if pool.is_empty() {
             self.initialize_new_database(pool)?;
         }
@@ -89,17 +89,14 @@ impl CatalogManager {
                 let table_name = tuple.values[0].varchar_to_str().ok_or_else(|| {
                     Error::CorruptPage("sys_pages table_name is not Varchar".into())
                 })?;
-
                 let root_page_id = tuple.values[1].bigint_to_i64().ok_or_else(|| {
                     Error::CorruptPage("sys_pages root_page_id is not BigInt".into())
                 })?;
-
                 self.table_roots
                     .insert(table_name.to_string(), PageId(root_page_id as u64));
                 Ok(())
             },
         )?;
-
         let mut raw_columns: HashMap<String, Vec<Column>> = HashMap::new();
 
         // Load `sys_schema` as {table_name -> vec[columns]} in temp raw_columns
@@ -159,7 +156,7 @@ impl CatalogManager {
 
             let index_meta = IndexMeta {
                 index_name: index_name.to_string(),
-                col_name: col_name.to_string(),
+                column_name: col_name.to_string(),
                 root_page_id: PageId(root_page_id as u64),
                 is_unique,
             };
@@ -221,7 +218,7 @@ impl CatalogManager {
     /// `sys_table_roots and sys_schemas`.
     pub fn create_table(
         &mut self,
-        pool: &mut BufferPool,
+        pool: &BufferPool,
         table_name: String,
         schema: Schema,
         lsn: u64,
@@ -285,18 +282,18 @@ impl CatalogManager {
     /// Allocates a new secondary index for a table, writing metadata to `sys_indexes`.
     pub fn create_index(
         &mut self,
-        pool: &mut BufferPool,
+        pool: &BufferPool,
         index_name: String,
         table_name: String,
-        col_name: String,
         is_unique: bool,
+        column_name: String,
         lsn: u64,
     ) -> Result<(), Error> {
         let table_schema = self.get_table_schema(&table_name)?;
-        if table_schema.get_col_idx(&col_name).is_err() {
+        if table_schema.get_col_idx(&column_name).is_err() {
             return Err(Error::ColumnNotFound(format!(
                 "column '{}' does not exist in table '{}'",
-                col_name, table_name
+                column_name, table_name
             )));
         }
         let table_indexes = self
@@ -321,7 +318,7 @@ impl CatalogManager {
             Value::BigInt(
                 i64::try_from(root_page_id.0).expect("new index's page id exceeded i64 Max"),
             ),
-            Value::Varchar(col_name.clone()),
+            Value::Varchar(column_name.clone()),
         ]);
         let mut index_buffer = Vec::new();
         index_tuple.encode(&sys_index_schema(), &mut index_buffer)?;
@@ -333,7 +330,7 @@ impl CatalogManager {
 
         let index_meta = IndexMeta {
             index_name: index_name.clone(),
-            col_name,
+            column_name,
             root_page_id,
             is_unique,
         };
@@ -344,7 +341,7 @@ impl CatalogManager {
     /// Locates and Reads system pages into memory and processes them against the
     /// provided schema before passing them to the given closure.
     fn scan_system_table<F>(
-        pool: &mut BufferPool,
+        pool: &BufferPool,
         root_id: PageId,
         schema: &Schema,
         mut process_tuple: F,
@@ -395,7 +392,7 @@ impl CatalogManager {
     }
 
     /// Allocates the baseline system pages for a completely fresh database.
-    fn initialize_new_database(&mut self, pool: &mut BufferPool) -> Result<(), Error> {
+    fn initialize_new_database(&mut self, pool: &BufferPool) -> Result<(), Error> {
         let (p1_id, p1_frame) = pool.new_page(true)?;
         let (p2_id, p2_frame) = pool.new_page(true)?;
         let (p3_id, p3_frame) = pool.new_page(true)?;
