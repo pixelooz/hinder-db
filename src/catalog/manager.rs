@@ -243,7 +243,6 @@ impl CatalogManager {
                 i64::try_from(root_page_id.0).expect("new table's page id exceeded i64 Max"),
             ),
         ]);
-
         let mut roots_buffer = Vec::new();
         page_root_tuple.encode(&sys_pages_schema(), &mut roots_buffer)?;
 
