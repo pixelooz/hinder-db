@@ -2,7 +2,7 @@ use crate::{
     error::Error,
     storage::{
         buffer_pool::BufferPool,
-        page::{BTreeNode, IndexEntry, PageId},
+        page::{BTreeNode, IndexEntry, InternalNode, PageId},
     },
 };
 
@@ -123,12 +123,7 @@ impl<'a> BpTree<'a> {
                 }
                 None => {
                     // No parent exists, stack empty; meaning the root split.
-                    self.split_root(
-                        split.promoted_key,
-                        self.root_page_id,
-                        split.new_page_id,
-                        lsn,
-                    )?;
+                    self.split_root(split.promoted_key, split.new_page_id, lsn)?;
                     break;
                 }
             }
@@ -136,15 +131,76 @@ impl<'a> BpTree<'a> {
         Ok(())
     }
 
-    /// Increases the height of the tree by allocating a brand new root `InternalNode`.
-    fn split_root(
-        &self,
-        promoted_key: u64,
-        root_page_id: PageId,
-        right_child_id: PageId,
-        lsn: u64,
-    ) -> Result<(), Error> {
-        unimplemented!()
+    /// Increases the height of the tree by overwriting the existing root into an `InternalNode`
+    /// with just the data of the promoted key and the two new children it points to.
+    ///
+    /// Implements **Root Pinning**: So, instead of allocating a new root page and updating the
+    /// catalog, we allocate a new left child, copy the root's data into it, and overwrite the
+    /// root page in-place. This ensures that the root's `PageId` never changes.
+    ///
+    /// We can do that because since the split has already happened before calling this method,
+    /// the root right now contains left half of its data and the right_page_id's page contains
+    /// the right half of the data. This allows us to just copy the data of the root page into a
+    /// new left page and the root page gets overwritten in-place with the data of the promoted
+    /// key.
+    ///
+    /// Why we need it? Because we'll have table wide locks for DMLs, and they can get by just
+    /// by acquiring read locks on the catalog manager, however if the *root* splits, then we
+    /// need to update the catalog, which WE CAN'T FUCkING DO WITH A READ LOCk!!!
+    /// So we don't change the root's `PageId` only, we instead allocate a new left page, copy
+    /// the *to be* root's data into it, write the promoted key into the root and badabing
+    /// badaboom we have the tree structure preserved without having to change the root's id.
+    /// How cool is that ºµº hehe.
+    fn split_root(&self, promoted_key: u64, right_page_id: PageId, lsn: u64) -> Result<(), Error> {
+        let root_frame = self.buffer_pool.fetch_page(self.root_page_id)?;
+        let mut root_guard = root_frame.write();
+
+        let is_leaf = matches!(&*root_guard, BTreeNode::Leaf(_));
+
+        let (left_page_id, left_child_frame) = self.buffer_pool.new_page(is_leaf)?;
+        let mut left_child_guard = left_child_frame.write();
+
+        // Copy the old root's exact state into the new left page.
+        *left_child_guard = root_guard.clone();
+
+        // But then update its PageId (its own identity) to its actual physical location
+        match *left_child_guard {
+            BTreeNode::Internal(ref mut internal) => {
+                internal.page_id = left_page_id;
+                internal.mark_dirty(lsn);
+            }
+            BTreeNode::Leaf(ref mut leaf) => {
+                leaf.page_id = left_page_id;
+                leaf.mark_dirty(lsn);
+            }
+        }
+        // If the root page was a leaf, then the right child after splitting would be pointing
+        // back  to this page, so we'll change that, making it point to the left_page_id.
+        if is_leaf {
+            let right_frame = self.buffer_pool.fetch_page(right_page_id)?;
+            let mut right_guard = right_frame.write();
+            if let BTreeNode::Leaf(right_node) = &mut *right_guard {
+                right_node.prev_page_id = left_page_id;
+                right_node.mark_dirty(lsn);
+            }
+        }
+        // Now, let's make the old root page, which could be a Leaf Node, become a Internal node.
+        let mut root_overwrite = InternalNode {
+            page_id: self.root_page_id,
+            rightmost_child_id: right_page_id,
+            ..Default::default()
+        };
+        root_overwrite.entries.push(IndexEntry {
+            key: promoted_key,
+            child_page_id: left_page_id,
+        });
+        root_overwrite.slot_array = vec![0];
+        root_overwrite.compact();
+        root_overwrite.mark_dirty(lsn);
+
+        // Complete erasure of the old root.
+        *root_guard = BTreeNode::Internal(root_overwrite);
+        Ok(())
     }
 
     /// Inserts an entry to the internal node after a leaf splits and promotes the key upwards.
@@ -337,7 +393,7 @@ mod tests {
         let (mut pool, db_path) = setup_pool("simple_insert");
 
         let (root_id, _) = pool.new_page(true).unwrap();
-        let mut btree = BpTree::new(&mut pool, root_id);
+        let btree = BpTree::new(&mut pool, root_id);
 
         let result = btree
             .insert_leaf(root_id, 100, vec![1, 2, 3], 10)
@@ -362,7 +418,7 @@ mod tests {
     fn test_insert_leaf_split_and_sibling_chain() {
         let (mut pool, db_path) = setup_pool("split_chain");
         let (root_id, _) = pool.new_page(true).unwrap();
-        let mut btree = BpTree::new(&mut pool, root_id);
+        let btree = BpTree::new(&mut pool, root_id);
 
         let large_payload = vec![0u8; 1024];
         let mut split_res = None;
@@ -418,7 +474,7 @@ mod tests {
         let (mut pool, db_path) = setup_pool("insertions_root_split");
 
         let (root_id, _) = pool.new_page(true).unwrap();
-        let mut btree = BpTree::new(&mut pool, root_id);
+        let btree = BpTree::new(&mut pool, root_id);
 
         let large_payload = vec![42u8; 400];
 
@@ -427,7 +483,9 @@ mod tests {
                 .insert(key, large_payload.clone(), key)
                 .unwrap();
         }
-        assert_ne!(btree.get_root_id(), root_id);
+        // Here we verify if root pinning actually works in our case or not given hundreds
+        //  of splits.
+        assert_eq!(btree.get_root_id(), root_id);
 
         for key in 1..=500 {
             let res = btree.find_record(key).expect("Lookup Failed");
