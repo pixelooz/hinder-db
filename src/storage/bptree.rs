@@ -10,7 +10,7 @@ use crate::{
 #[derive(Debug)]
 pub struct BpTree<'a> {
     /// Mutable reference to the centralized Buffer Pool conveyor belt.
-    buffer_pool: &'a mut BufferPool,
+    buffer_pool: &'a BufferPool,
 
     /// The physical PageId of the current root node.
     root_page_id: PageId,
@@ -28,7 +28,7 @@ pub struct SplitResult {
 
 impl<'a> BpTree<'a> {
     /// Constructs a initialized B+Tree with the given `BufferPool` and `PageId`.
-    pub fn new(pool: &'a mut BufferPool, root_page_id: PageId) -> Self {
+    pub fn new(pool: &'a BufferPool, root_page_id: PageId) -> Self {
         Self {
             buffer_pool: pool,
             root_page_id,
@@ -89,10 +89,10 @@ impl<'a> BpTree<'a> {
         self.root_page_id
     }
 
-    /// Inserts a new record into the current leaf page. If physical page limit is
-    /// met, then it splits the current page and the promoted keys are propogated
-    /// upwards, increasing the tree height incase the root splits.
-    pub fn insert(&mut self, row_id: u64, payload: Vec<u8>, lsn: u64) -> Result<(), Error> {
+    /// Inserts a new record into the current leaf page. If physical page limit is met, then it
+    /// splits the current page and the promoted keys are propagated upwards, increasing the
+    /// tree height in case the root splits.
+    pub fn insert(&self, row_id: u64, payload: Vec<u8>, lsn: u64) -> Result<(), Error> {
         let mut parents = Vec::new();
         let mut curr_page_id = self.root_page_id;
 
@@ -109,7 +109,7 @@ impl<'a> BpTree<'a> {
         }
         let mut split_res = self.insert_leaf(curr_page_id, row_id, payload, lsn)?;
 
-        // Propogate splits upward using the path stack.
+        // Propagate splits upward using the path stack.
         while let Some(split) = split_res {
             match parents.pop() {
                 Some(parent_id) => {
@@ -138,41 +138,24 @@ impl<'a> BpTree<'a> {
 
     /// Increases the height of the tree by allocating a brand new root `InternalNode`.
     fn split_root(
-        &mut self,
+        &self,
         promoted_key: u64,
-        left_child_id: PageId, // old root
+        root_page_id: PageId,
         right_child_id: PageId,
         lsn: u64,
     ) -> Result<(), Error> {
-        let (root_id, root_frame) = self.buffer_pool.new_page(false)?;
-        let mut root_guard = root_frame.write();
-
-        let BTreeNode::Internal(ref mut new_root) = *root_guard else {
-            unreachable!("new_page(false) must return an Internal Node");
-        };
-        new_root.rightmost_child_id = right_child_id;
-        new_root.entries.push(IndexEntry {
-            key: promoted_key,
-            child_page_id: left_child_id,
-        });
-        new_root.slot_array = vec![0];
-        root_guard.mark_dirty(lsn);
-
-        // update the active root Id.
-        self.root_page_id = root_id;
-        Ok(())
+        unimplemented!()
     }
 
-    /// Inserts an entry to the internal node after a leaf splits and promotes
-    /// the key upwards. If physical capacity is exceeded, it allocates a new
-    /// page from the `BufferPool`, splits the current page into half writing
-    /// other half of the data into the newly allocated sibling page and also
-    /// performs compaction.
+    /// Inserts an entry to the internal node after a leaf splits and promotes the key upwards.
+    /// If physical capacity is exceeded, it allocates a new page from the `BufferPool`, splits
+    /// the current page into half writing other half of the data into the newly allocated
+    /// sibling page and also performs compaction.
     ///
-    /// Returns the `promoted_key` and the `new_page_id` if split happens as
-    /// `Some(SplitResult)` or `None` if data was written to the current page only.
+    /// Returns the `promoted_key` and the `new_page_id` if split happens as `Some(SplitResult)`
+    /// or `None` if data was written to the current page only.
     fn insert_internal(
-        &mut self,
+        &self,
         parent_id: PageId,
         promoted_key: u64,
         next_page_id: PageId,
@@ -226,7 +209,7 @@ impl<'a> BpTree<'a> {
     /// Returns the `promoted_row_id` and the `new_page_id` if split happens as
     /// `Some(SplitResult)` or `None` if data was written to the current page only.
     fn insert_leaf(
-        &mut self,
+        &self,
         leaf_page_id: PageId,
         row_id: u64,
         payload: Vec<u8>,
@@ -308,7 +291,7 @@ impl<'a> BpTree<'a> {
     /// key a.k.a. row_id.
     ///
     /// Returns an owned copy of the payload if found and not logically deleted.
-    pub fn find_record(&mut self, row_id: u64) -> Result<Option<Vec<u8>>, Error> {
+    pub fn find_record(&self, row_id: u64) -> Result<Option<Vec<u8>>, Error> {
         let mut curr_page_id = self.root_page_id;
         loop {
             let frame = self.buffer_pool.fetch_page(curr_page_id)?;

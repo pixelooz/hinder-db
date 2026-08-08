@@ -236,7 +236,7 @@ impl CatalogManager {
         root_frame.write().mark_dirty(lsn);
 
         // Inserting into sys_table_roots_page
-        let mut sys_table_roots_tree = BpTree::new(pool, SYS_TABLE_ROOTS_ROOT_ID);
+        let sys_table_roots_tree = BpTree::new(pool, SYS_TABLE_ROOTS_ROOT_ID);
         let page_root_tuple = Tuple::new(vec![
             Value::Varchar(table_name.clone()),
             Value::BigInt(
@@ -253,7 +253,7 @@ impl CatalogManager {
         sys_table_roots_tree.insert(sys_row_id, roots_buffer, lsn)?;
 
         // Insert into sys_schema_page
-        let mut sys_schema_tree = BpTree::new(pool, SYS_SCHEMAS_ROOT_ID);
+        let sys_schema_tree = BpTree::new(pool, SYS_SCHEMAS_ROOT_ID);
         let sys_schema = sys_schema_schema();
 
         for col in &schema.columns {
@@ -313,7 +313,7 @@ impl CatalogManager {
         let (root_page_id, root_frame) = pool.new_page(true)?;
         root_frame.write().mark_dirty(lsn);
 
-        let mut sys_index_tree = BpTree::new(pool, root_page_id);
+        let sys_index_tree = BpTree::new(pool, root_page_id);
         let index_tuple = Tuple::new(vec![
             Value::Varchar(table_name.clone()),
             Value::Varchar(index_name.clone()),
