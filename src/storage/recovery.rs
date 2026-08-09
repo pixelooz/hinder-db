@@ -20,7 +20,7 @@ impl RecoveryEngine {
     /// Bootstraps database recovery on startup.
     /// Returns the highest observed Lsn so the storage engine can initialize
     /// its runtime counter.
-    pub fn init<P>(path: P, buf_pool: &mut BufferPool) -> Result<u64, Error>
+    pub fn init<P>(path: P, buf_pool: &BufferPool) -> Result<u64, Error>
     where
         P: AsRef<Path>,
     {
@@ -44,24 +44,18 @@ impl RecoveryEngine {
 
     /// Replays a sequence of Wal entries against the Buffer Pool to reconstruct
     /// lost memory state.
-    pub fn replay(buf_pool: &mut BufferPool, batch: &WalBatch) -> Result<u64, Error> {
+    pub fn replay(buf_pool: &BufferPool, batch: &WalBatch) -> Result<u64, Error> {
         let mut max_observed_lsn = 0;
 
-        for entry in batch {
-            max_observed_lsn = cmp::max(max_observed_lsn, entry.lsn);
-            {
-                // Acquire RAII write guard over the page buffer.
-                let frame = buf_pool.fetch_page(entry.page_id)?;
-                let mut node = frame.write();
-
-                // If the physical page on disk already bears an Lsn >= log's
-                // lsn this update was already written to disk.
-                if entry.lsn <= node.get_last_lsn() {
-                    continue;
-                }
-                Self::apply_entry(&mut node, entry)?;
-                node.mark_dirty(entry.lsn);
+        for wal_entry in batch {
+            max_observed_lsn = cmp::max(max_observed_lsn, wal_entry.lsn);
+            let frame = buf_pool.fetch_page(wal_entry.page_id)?;
+            let mut node = frame.write();
+            if wal_entry.lsn <= node.get_last_lsn() {
+                continue;
             }
+            Self::apply_entry(&mut node, wal_entry)?;
+            node.mark_dirty(wal_entry.lsn);
         }
         buf_pool.flush_all_pages()?;
         Ok(max_observed_lsn)

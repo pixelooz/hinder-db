@@ -5,6 +5,7 @@ mod error;
 mod execution;
 mod planner;
 mod relation;
+mod shrimp;
 mod sql;
 mod storage;
 

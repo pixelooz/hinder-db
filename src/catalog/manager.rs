@@ -20,9 +20,9 @@ use crate::{
     },
 };
 
-pub const SYS_TABLE_ROOTS_ROOT_ID: PageId = PageId(1);
-pub const SYS_SCHEMAS_ROOT_ID: PageId = PageId(2);
-pub const SYS_INDEXES_ROOT_ID: PageId = PageId(3);
+pub const SYS_TABLE_ROOTS_ROOT_ID: PageId = PageId(8192);
+pub const SYS_SCHEMAS_ROOT_ID: PageId = PageId(16384);
+pub const SYS_INDEXES_ROOT_ID: PageId = PageId(24576);
 
 /// Represents the physical and logical properties of a secondary index.
 #[derive(Debug, Clone)]
@@ -401,9 +401,13 @@ impl CatalogManager {
             || p2_id != SYS_SCHEMAS_ROOT_ID
             || p3_id != SYS_INDEXES_ROOT_ID
         {
-            return Err(Error::CorruptPage(
-                "failed to allocate system pages sequentially".into(),
-            ));
+            return Err(Error::CorruptPage(format!(
+                "failed to allocate system pages sequentially
+                sys_table_roots = {:?},
+                sys_schema = {:?},
+                sys_index = {:?}",
+                p1_id, p2_id, p3_id
+            )));
         }
         p1_frame.write().mark_dirty(0);
         p2_frame.write().mark_dirty(0);
