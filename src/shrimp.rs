@@ -115,19 +115,22 @@ impl<'a> Connection<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error, path::Path};
+    use std::{error::Error, fs, path::Path};
 
     use crate::shrimp::Database;
 
     #[test]
     fn test_complete_database_demo() -> Result<(), Box<dyn Error>> {
-        let db_path = Path::new("/Volumes/External T7/test.db");
-        let wal_path = Path::new("/Volumes/External T7/test.wal");
+        let db_path = Path::new("/Volumes/External T7/test_full.db");
+        let wal_path = Path::new("/Volumes/External T7/test_full.wal");
 
         let db = Database::open(db_path, wal_path, 100, true)?;
         let mut conn = db.connect();
         let tuples = conn.execute("CREATE TABLE users (id INT, name VARCHAR(255))")?;
         dbg!(tuples);
+
+        let _ = fs::remove_file(db_path);
+        let _ = fs::remove_file(wal_path);
         Ok(())
     }
 }

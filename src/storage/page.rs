@@ -1002,7 +1002,7 @@ mod tests {
         assert_eq!(read_cursor.read_u16(), u16::MAX);
         assert_eq!(read_cursor.read_u32(), 123456789);
         assert_eq!(read_cursor.read_u64(), u64::MAX);
-        assert_eq!(read_cursor.read_bytes(7), b"shrimp-db");
+        assert_eq!(read_cursor.read_bytes(9), b"shrimp-db");
     }
 
     /// Validates round-trip encoding and decoding of an empty LeafNode without
