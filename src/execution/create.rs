@@ -44,14 +44,14 @@ impl Executor for CreateExecutor {
         }
         let mut catalog_guard = ctx.catalog.write();
 
-        let lsn = ctx.txn_id; // Temporary before we wire the wal up.
+        let txn_id = ctx.txn_id; // Temporary before we wire the wal up.
         match &self.operation {
             CreateOperation::Table { table_name, schema } => {
                 catalog_guard.create_table(
                     ctx.buffer_pool,
                     table_name.clone(),
                     schema.clone(),
-                    lsn,
+                    txn_id,
                 )?;
             }
             CreateOperation::Index {
@@ -66,7 +66,7 @@ impl Executor for CreateExecutor {
                     table_name.clone(),
                     *is_unique,
                     column_name.clone(),
-                    lsn,
+                    txn_id,
                 )?;
             }
         }

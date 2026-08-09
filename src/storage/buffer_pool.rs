@@ -1,4 +1,8 @@
-use std::{collections::HashMap, fmt::Debug, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    sync::Arc,
+};
 
 use parking_lot::{Mutex, RwLock};
 
@@ -7,20 +11,23 @@ use crate::{
     storage::{
         lru::LruReplacer,
         page::{BTreeNode, DiskManager, Page, PageId},
+        wal::{WalManager, WalRecord},
     },
 };
 
-/// Decouples the memory manager from the physical Wal implementation.
-pub trait WalFlusher: Debug + Send + Sync {
-    /// Forces the Wal manager to synchronously write and fsync all
-    /// log records up-to and including the specified lsn, out to
-    /// the non-volatile disk.
-    fn flush_upto(&self, lsn: u64) -> Result<(), Error>;
-}
-
-/// A thread-safe referance to a cached page. The `Arc` provides lifecycle tracking
+/// A thread-safe reference to a cached page. The `Arc` provides life cycle tracking
 /// (pinning), and the `RwLock` provides per page "latching".
 pub type Frame = Arc<RwLock<BTreeNode>>;
+
+/// Tracks active transactions to prevent duplicate Undo logging and facilitate
+/// Commit flushing.
+#[derive(Debug, Default)]
+struct TxnState {
+    /// Pages that have already had their before-image (Undo) logged to the Wal.
+    undo_logged: HashSet<PageId>,
+    /// Pages modified by this transaction that need a Redo log on commit.
+    dirty_pages: HashSet<PageId>,
+}
 
 /// Handles memory caching, page fetching, and eviction.
 ///
@@ -29,7 +36,7 @@ pub type Frame = Arc<RwLock<BTreeNode>>;
 /// than `&mut self`, because of which previously while the borrow checker could stop
 /// us from using the buffer pool simultaneously, now it won't, and two threads can
 /// simultaneously perform mutations (which we are allowing, for background cleanup and
-/// checkpointing and eventually mvcc after I learn how to integrate that).
+/// check-pointing and eventually mvcc after I learn how to integrate that).
 ///
 /// To do that we are giving the replacer and page_table their own separate locks
 /// because otherwise the entire buffer pool will have to be locked when the
@@ -53,11 +60,14 @@ pub type Frame = Arc<RwLock<BTreeNode>>;
 /// only hold the read lock on the page_table just for the lookup.
 #[derive(Debug)]
 pub struct BufferPool {
-    disk_manager: DiskManager,
     replacer: Mutex<LruReplacer>,
+    disk_manager: DiskManager,
     page_table: RwLock<HashMap<PageId, Frame>>,
     capacity: usize,
-    wal_flusher: Option<Arc<dyn WalFlusher>>,
+    wal_manager: Arc<Mutex<WalManager>>,
+
+    /// Tracks active transactions for Undo/Redo generation.
+    active_txns: Mutex<HashMap<u64, TxnState>>,
 }
 
 impl BufferPool {
@@ -65,14 +75,15 @@ impl BufferPool {
     pub fn new(
         disk_manager: DiskManager,
         capacity: usize,
-        wal_flusher: Option<Arc<dyn WalFlusher>>,
+        wal_manager: Arc<Mutex<WalManager>>,
     ) -> Self {
         Self {
             disk_manager,
             replacer: Mutex::new(LruReplacer::new(capacity)),
             page_table: RwLock::new(HashMap::with_capacity(capacity)),
             capacity,
-            wal_flusher,
+            wal_manager,
+            active_txns: Mutex::new(HashMap::new()),
         }
     }
 
@@ -123,6 +134,69 @@ impl BufferPool {
         Ok((page_id, frame))
     }
 
+    /// Prepares a page for modifications. Logs the 8KiB before-image (Undo) to the Wal
+    /// exactly once per transaction, enabling safe STEAL eviction.
+    pub fn begin_page_mutation(&self, page_id: PageId, txn_id: u64) -> Result<(), Error> {
+        let frame = self.fetch_page(page_id)?;
+        let mut txns = self.active_txns.lock();
+
+        let state = txns.entry(txn_id).or_default();
+        // Only log the Undo image if this is the first time this txn is touching
+        // this page.
+        if !state.undo_logged.contains(&page_id) {
+            let mut page = Box::new(Page::new());
+            frame.read().encode(&mut page)?; // Capture the before image.
+            let record = WalRecord::Undo {
+                page_id,
+                page,
+                txn_id,
+            };
+            self.wal_manager.lock().write_batch(&[record])?;
+            state.undo_logged.insert(page_id);
+        }
+        state.dirty_pages.insert(page_id);
+        Ok(())
+    }
+
+    /// Commits a transaction. Generates 8KiB after-images (Redo) for all modified pages,
+    /// batches them with a commit marker, and issues a single synchronous disk write.
+    pub fn commit_transaction(&self, txn_id: u64) -> Result<(), Error> {
+        let Some(state) = self.active_txns.lock().remove(&txn_id) else {
+            return Ok(());
+        };
+        let page_table = self.page_table.read();
+        let mut batch = Vec::with_capacity(state.dirty_pages.len() + 1);
+        for page_id in state.dirty_pages {
+            if let Some(frame) = page_table.get(&page_id) {
+                let mut page = Box::new(Page::new());
+                frame.read().encode(&mut page)?;
+                batch.push(WalRecord::Redo {
+                    page_id,
+                    page,
+                    txn_id,
+                });
+            }
+        }
+        batch.push(WalRecord::Commit { txn_id });
+        self.wal_manager.lock().write_batch(&batch)?;
+        Ok(())
+    }
+
+    /// Aborts a transaction. Drops all modified pages from memory entirely. By invalidating
+    /// the cache, the next read will fetch the uncorrupted data from disk, effectively
+    /// rolling back the memory state.
+    pub fn abort_transaction(&self, txn_id: u64) {
+        if let Some(state) = self.active_txns.lock().remove(&txn_id) {
+            let mut page_table = self.page_table.write();
+            let mut replacer = self.replacer.lock();
+
+            for page_id in state.dirty_pages {
+                page_table.remove(&page_id);
+                replacer.remove(page_id);
+            }
+        }
+    }
+
     /// Flushes a specific page to disk if it is dirty.
     pub fn flush_page(&self, page_id: PageId) -> Result<(), Error> {
         let frame = match self.page_table.read().get(&page_id) {
@@ -134,9 +208,7 @@ impl BufferPool {
         if !node_guard.is_dirty() {
             return Ok(());
         }
-        if let Some(flusher) = &self.wal_flusher {
-            flusher.flush_upto(node_guard.get_last_lsn())?;
-        }
+        self.wal_manager.lock().sync()?;
         let mut raw_page = Page::new();
         node_guard.encode(&mut raw_page)?;
         self.disk_manager.write_page(page_id, &raw_page)?;
@@ -176,9 +248,7 @@ impl BufferPool {
         if let Some(frame) = page_table.get(&evict_id) {
             let mut node_guard = frame.upgradable_read();
             if node_guard.is_dirty() {
-                if let Some(flusher) = &self.wal_flusher {
-                    flusher.flush_upto(node_guard.get_last_lsn())?;
-                }
+                self.wal_manager.lock().sync()?;
                 let mut raw_page = Page::new();
                 node_guard.encode(&mut raw_page)?;
                 self.disk_manager

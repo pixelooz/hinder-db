@@ -92,7 +92,7 @@ impl<'a> BpTree<'a> {
     /// Inserts a new record into the current leaf page. If physical page limit is met, then it
     /// splits the current page and the promoted keys are propagated upwards, increasing the
     /// tree height in case the root splits.
-    pub fn insert(&self, row_id: u64, payload: Vec<u8>, lsn: u64) -> Result<(), Error> {
+    pub fn insert(&self, row_id: u64, payload: Vec<u8>, txn_id: u64) -> Result<(), Error> {
         let mut parents = Vec::new();
         let mut curr_page_id = self.root_page_id;
 
@@ -107,7 +107,7 @@ impl<'a> BpTree<'a> {
                 _ => break,
             }
         }
-        let mut split_res = self.insert_leaf(curr_page_id, row_id, payload, lsn)?;
+        let mut split_res = self.insert_leaf(curr_page_id, row_id, payload, txn_id)?;
 
         // Propagate splits upward using the path stack.
         while let Some(split) = split_res {
@@ -118,12 +118,12 @@ impl<'a> BpTree<'a> {
                         parent_id,
                         split.promoted_key,
                         split.new_page_id,
-                        lsn,
+                        txn_id,
                     )?;
                 }
                 None => {
                     // No parent exists, stack empty; meaning the root split.
-                    self.split_root(split.promoted_key, split.new_page_id, lsn)?;
+                    self.split_root(split.promoted_key, split.new_page_id, txn_id)?;
                     break;
                 }
             }
@@ -151,37 +151,49 @@ impl<'a> BpTree<'a> {
     /// the *to be* root's data into it, write the promoted key into the root and badabing
     /// badaboom we have the tree structure preserved without having to change the root's id.
     /// How cool is that ºµº hehe.
-    fn split_root(&self, promoted_key: u64, right_page_id: PageId, lsn: u64) -> Result<(), Error> {
+    fn split_root(
+        &self,
+        promoted_key: u64,
+        right_page_id: PageId,
+        txn_id: u64,
+    ) -> Result<(), Error> {
+        self.buffer_pool
+            .begin_page_mutation(self.root_page_id, txn_id)?;
         let root_frame = self.buffer_pool.fetch_page(self.root_page_id)?;
-        let mut root_guard = root_frame.write();
 
+        let mut root_guard = root_frame.write();
         let is_leaf = matches!(&*root_guard, BTreeNode::Leaf(_));
 
         let (left_page_id, left_child_frame) = self.buffer_pool.new_page(is_leaf)?;
-        let mut left_child_guard = left_child_frame.write();
+        self.buffer_pool
+            .begin_page_mutation(left_page_id, txn_id)?;
 
+        let mut left_child_guard = left_child_frame.write();
         // Copy the old root's exact state into the new left page.
         *left_child_guard = root_guard.clone();
 
         // But then update its PageId (its own identity) to its actual physical location
-        match *left_child_guard {
-            BTreeNode::Internal(ref mut internal) => {
+        match &mut *left_child_guard {
+            BTreeNode::Internal(internal) => {
                 internal.page_id = left_page_id;
-                internal.mark_dirty(lsn);
+                internal.mark_dirty();
             }
-            BTreeNode::Leaf(ref mut leaf) => {
+            BTreeNode::Leaf(leaf) => {
                 leaf.page_id = left_page_id;
-                leaf.mark_dirty(lsn);
+                leaf.mark_dirty();
             }
         }
         // If the root page was a leaf, then the right child after splitting would be pointing
         // back  to this page, so we'll change that, making it point to the left_page_id.
         if is_leaf {
+            self.buffer_pool
+                .begin_page_mutation(right_page_id, txn_id)?;
             let right_frame = self.buffer_pool.fetch_page(right_page_id)?;
+
             let mut right_guard = right_frame.write();
             if let BTreeNode::Leaf(right_node) = &mut *right_guard {
                 right_node.prev_page_id = left_page_id;
-                right_node.mark_dirty(lsn);
+                right_node.mark_dirty();
             }
         }
         // Now, let's make the old root page, which could be a Leaf Node, become a Internal node.
@@ -196,7 +208,7 @@ impl<'a> BpTree<'a> {
         });
         root_overwrite.slot_array = vec![0];
         root_overwrite.compact();
-        root_overwrite.mark_dirty(lsn);
+        root_overwrite.mark_dirty();
 
         // Complete erasure of the old root.
         *root_guard = BTreeNode::Internal(root_overwrite);
@@ -214,47 +226,63 @@ impl<'a> BpTree<'a> {
         &self,
         parent_id: PageId,
         promoted_key: u64,
-        next_page_id: PageId,
-        lsn: u64,
+        child_page_id: PageId,
+        txn_id: u64,
     ) -> Result<Option<SplitResult>, Error> {
+        self.buffer_pool
+            .begin_page_mutation(parent_id, txn_id)?;
+
         let parent_frame = self.buffer_pool.fetch_page(parent_id)?;
         let mut node_guard = parent_frame.write();
 
-        let BTreeNode::Internal(ref mut parent_node) = *node_guard else {
+        let BTreeNode::Internal(parent_node) = &mut *node_guard else {
             return Err(Error::CorruptPage(
                 "expected internal node during upward key propagation".into(),
             ));
         };
-        match parent_node.insert_entry(promoted_key, next_page_id) {
+        match parent_node.insert_entry(promoted_key, child_page_id) {
             Err(Error::PageFull) => {
-                let (new_page_id, new_frame) = self.buffer_pool.new_page(false)?;
-                let mut internal_guard = new_frame.write();
-
-                let BTreeNode::Internal(ref mut new_internal) = *internal_guard else {
-                    unreachable!();
-                };
-                let new_promoted_key = parent_node.split(new_internal)?;
-
-                // Insert the pending entry key into whichever sibling now owns its branch.
-                if promoted_key < new_promoted_key {
-                    parent_node.insert_entry(promoted_key, next_page_id)?;
-                } else {
-                    new_internal.insert_entry(promoted_key, next_page_id)?;
-                }
-                parent_node.mark_dirty(lsn);
-                new_internal.mark_dirty(lsn);
-
-                Ok(Some(SplitResult {
-                    promoted_key: new_promoted_key,
-                    new_page_id,
-                }))
+                self.split_internal(parent_node, promoted_key, child_page_id, txn_id)
             }
             Ok(()) => {
-                parent_node.mark_dirty(lsn);
+                parent_node.mark_dirty();
                 Ok(None)
             }
             Err(db_error) => Err(db_error),
         }
+    }
+
+    /// Helper method for splitting internal node and ensuring log entries are marked correctly.
+    fn split_internal(
+        &self,
+        left_internal: &mut InternalNode,
+        promoted_key: u64,
+        child_page_id: PageId,
+        txn_id: u64,
+    ) -> Result<Option<SplitResult>, Error> {
+        let (right_internal_id, right_frame) = self.buffer_pool.new_page(false)?;
+        self.buffer_pool
+            .begin_page_mutation(right_internal_id, txn_id)?;
+
+        let mut right_guard = right_frame.write();
+        let BTreeNode::Internal(right_internal) = &mut *right_guard else {
+            unreachable!("new_page(false) should never return a Leaf node");
+        };
+        let new_promoted_key = left_internal.split(right_internal)?;
+
+        // Insert the pending entry key into whichever sibling now owns its branch.
+        if promoted_key < new_promoted_key {
+            left_internal.insert_entry(promoted_key, child_page_id)?;
+        } else {
+            right_internal.insert_entry(promoted_key, child_page_id)?;
+        }
+        left_internal.mark_dirty();
+        right_internal.mark_dirty();
+
+        Ok(Some(SplitResult {
+            promoted_key: new_promoted_key,
+            new_page_id: right_internal_id,
+        }))
     }
 
     /// Inserts a key-value payload directly into a target leaf page. If physical
@@ -269,14 +297,17 @@ impl<'a> BpTree<'a> {
         leaf_page_id: PageId,
         row_id: u64,
         payload: Vec<u8>,
-        lsn: u64,
+        txn_id: u64,
     ) -> Result<Option<SplitResult>, Error> {
+        self.buffer_pool
+            .begin_page_mutation(leaf_page_id, txn_id)?;
+
         let leaf_frame = self.buffer_pool.fetch_page(leaf_page_id)?;
         let mut node_guard = leaf_frame.write();
 
         let left_leaf = match &mut *node_guard {
             BTreeNode::Leaf(node) => node,
-            BTreeNode::Internal(_) => {
+            _ => {
                 return Err(Error::CorruptPage(
                     "attempted to insert data on a internal routing node".into(),
                 ));
@@ -284,7 +315,7 @@ impl<'a> BpTree<'a> {
         };
         match left_leaf.insert_record(row_id, payload.clone()) {
             Ok(()) => {
-                node_guard.mark_dirty(lsn);
+                node_guard.mark_dirty();
                 return Ok(None);
             }
             Err(Error::DuplicateKey(key)) => return Err(Error::DuplicateKey(key)),
@@ -293,12 +324,14 @@ impl<'a> BpTree<'a> {
             }
             Err(err) => return Err(err),
         }
-        let (new_leaf_id, new_leaf_frame) = self.buffer_pool.new_page(true)?;
-        let mut new_node_guard = new_leaf_frame.write();
+        let (right_leaf_id, right_leaf_frame) = self.buffer_pool.new_page(true)?;
 
-        let right_leaf = match &mut *new_node_guard {
-            BTreeNode::Leaf(node) => node,
-            _ => unreachable!("new_page(true) must return a LeafNode"),
+        self.buffer_pool
+            .begin_page_mutation(right_leaf_id, txn_id)?;
+        let mut new_node_guard = right_leaf_frame.write();
+
+        let BTreeNode::Leaf(right_leaf) = &mut *new_node_guard else {
+            unreachable!("new_page(true) must return a LeafNode");
         };
         let promoted_row_id = left_leaf.split(right_leaf)?;
 
@@ -320,26 +353,29 @@ impl<'a> BpTree<'a> {
 
         // wire the left_leaf to point towards the right_leaf.
         left_leaf.has_next = true;
-        left_leaf.next_page_id = new_leaf_id;
+        left_leaf.next_page_id = right_leaf_id;
 
         // If an old right sibling existed, fetch it and connects its backward
         // pointer.
         if old_has_next {
+            self.buffer_pool
+                .begin_page_mutation(old_next_id, txn_id)?;
+
             let old_right_frame = self.buffer_pool.fetch_page(old_next_id)?;
             let mut old_right_guard = old_right_frame.write();
 
             if let BTreeNode::Leaf(ref mut old_right_leaf) = *old_right_guard {
                 old_right_leaf.has_prev = true;
-                old_right_leaf.prev_page_id = new_leaf_id;
-                old_right_guard.mark_dirty(lsn);
+                old_right_leaf.prev_page_id = right_leaf_id;
+                old_right_guard.mark_dirty();
             }
         }
-        node_guard.mark_dirty(lsn);
-        new_node_guard.mark_dirty(lsn);
+        node_guard.mark_dirty();
+        new_node_guard.mark_dirty();
 
         Ok(Some(SplitResult {
+            new_page_id: right_leaf_id,
             promoted_key: promoted_row_id,
-            new_page_id: new_leaf_id,
         }))
     }
 
@@ -368,7 +404,10 @@ mod tests {
     use std::{
         fs::{self},
         path::PathBuf,
+        sync::Arc,
     };
+
+    use parking_lot::Mutex;
 
     use crate::{
         error::Error,
@@ -376,21 +415,25 @@ mod tests {
             bptree::BpTree,
             buffer_pool::BufferPool,
             page::{BTreeNode, DiskManager},
+            wal::WalManager,
         },
     };
 
-    fn setup_pool(name: &str) -> (BufferPool, PathBuf) {
-        let mut path = PathBuf::from("/Volumes/External T7/");
-        path.push(format!("test_{}.tbl", name));
-        let _ = fs::remove_file(&path);
-        let disk_manager = DiskManager::open(&path).expect("opening DiskManager failed");
-        let pool = BufferPool::new(disk_manager, 20, None);
-        (pool, path)
+    fn setup_pool(name: &str) -> (BufferPool, PathBuf, PathBuf) {
+        let db_path = PathBuf::from(format!("/Volumes/External T7/test_{}.tbl", name));
+        let wal_path = PathBuf::from(format!("/Volumes/External T7/test_{}.wal", name));
+        let _ = fs::remove_file(&db_path);
+
+        let disk_manager = DiskManager::open(&db_path).expect("opening DiskManager failed");
+        let wal = WalManager::open(&wal_path, false).unwrap();
+        let wal_manager = Arc::new(Mutex::new(wal));
+        let pool = BufferPool::new(disk_manager, 20, wal_manager);
+        (pool, db_path, wal_path)
     }
 
     #[test]
     fn test_insert_leaf_duplicate_rejection() {
-        let (mut pool, db_path) = setup_pool("simple_insert");
+        let (mut pool, db_path, wal_path) = setup_pool("simple_insert");
 
         let (root_id, _) = pool.new_page(true).unwrap();
         let btree = BpTree::new(&mut pool, root_id);
@@ -412,11 +455,12 @@ mod tests {
         assert!(matches!(dup_result, Err(Error::DuplicateKey(100))));
 
         let _ = fs::remove_file(db_path);
+        let _ = fs::remove_file(wal_path);
     }
 
     #[test]
     fn test_insert_leaf_split_and_sibling_chain() {
-        let (mut pool, db_path) = setup_pool("split_chain");
+        let (mut pool, db_path, wal_path) = setup_pool("split_chain");
         let (root_id, _) = pool.new_page(true).unwrap();
         let btree = BpTree::new(&mut pool, root_id);
 
@@ -467,11 +511,12 @@ mod tests {
             _ => panic!("expected btree leaf nodes"),
         }
         let _ = fs::remove_file(db_path);
+        let _ = fs::remove_file(wal_path);
     }
 
     #[test]
     fn test_insertions_and_root_splits() {
-        let (mut pool, db_path) = setup_pool("insertions_root_split");
+        let (mut pool, db_path, wal_path) = setup_pool("insertions_root_split");
 
         let (root_id, _) = pool.new_page(true).unwrap();
         let btree = BpTree::new(&mut pool, root_id);
@@ -493,5 +538,6 @@ mod tests {
             assert_eq!(res.unwrap().len(), 400, "wrong data size");
         }
         fs::remove_file(db_path).unwrap();
+        fs::remove_file(wal_path).unwrap();
     }
 }

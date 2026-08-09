@@ -1,10 +1,8 @@
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
 use crate::{
-    catalog::manager::CatalogManager,
-    error::Error,
-    relation::tuple::Tuple,
-    storage::{buffer_pool::BufferPool, wal::WalManager},
+    catalog::manager::CatalogManager, error::Error, relation::tuple::Tuple,
+    storage::buffer_pool::BufferPool,
 };
 
 /// The runtime context that will be passed down the Volcano execution Tree.
@@ -17,10 +15,6 @@ pub struct ExecutionContext<'a> {
     /// A reference to the catalog for O(1) metadata lookups.
     pub catalog: &'a RwLock<CatalogManager>,
 
-    /// A reusable buffer to avoid heap allocation when fetching raw bytes
-    /// from pages, defaults as 2KiB.
-    pub buffer_block: Vec<u8>,
-
     /// The unique transaction id grouping all operations in this query.
     ///
     /// We don't support transactions (like the multiple table kind) tho
@@ -28,25 +22,19 @@ pub struct ExecutionContext<'a> {
     /// have the structure for it, but need to learn more to get it right.
     pub txn_id: u64,
 
-    /// Mutable reference to the Wal for logging stateful operations like
-    /// insert, update, stuff.
-    pub wal_manager: &'a Mutex<WalManager>,
+    /// A reusable buffer to avoid heap allocation when fetching raw bytes
+    /// from pages, defaults as 2KiB.
+    pub buffer_block: Vec<u8>,
 }
 
 impl<'a> ExecutionContext<'a> {
     /// Initializes a new `ExecutionContext`.
-    pub fn new(
-        pool: &'a BufferPool,
-        catalog: &'a RwLock<CatalogManager>,
-        txn_id: u64,
-        wal_manager: &'a Mutex<WalManager>,
-    ) -> Self {
+    pub fn new(pool: &'a BufferPool, catalog: &'a RwLock<CatalogManager>, txn_id: u64) -> Self {
         Self {
             buffer_pool: pool,
             catalog,
             buffer_block: Vec::with_capacity(2048),
             txn_id,
-            wal_manager,
         }
     }
 }

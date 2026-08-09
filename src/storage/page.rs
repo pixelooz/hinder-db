@@ -73,7 +73,6 @@ pub const MAX_VALUE_SIZE: usize = 1024;
 /// Fixed size of the internal node header.
 pub const INTERNAL_NODE_HEADER_SIZE: usize = 1 + // entry_type (u8)
 8 + // page_id (u64)
-8 + // last_lsn (u64)
 8 + // rightmost_child_id (u64)
 4 + // slot_entry (u32)
 2; // free_size
@@ -81,7 +80,6 @@ pub const INTERNAL_NODE_HEADER_SIZE: usize = 1 + // entry_type (u8)
 /// Fixed size of the leaf node header.
 pub const LEAF_NODE_HEADER_SIZE: usize = 1 + // entry_type (u8)
 8 + // page_id (u64)
-8 + // last_lsn (u64)
 1 + // has_prev (u8 bool)
 1 + // has_next (u8 bool)
 8 + // prev_page_id (u64)
@@ -124,7 +122,6 @@ pub struct Record {
 #[derive(Debug, Default, Clone)]
 pub struct InternalNode {
     pub page_id: PageId,
-    pub last_lsn: u64,
     pub rightmost_child_id: PageId,
     pub slot_array: Vec<u16>,
     pub entries: Vec<IndexEntry>,
@@ -150,19 +147,8 @@ impl InternalNode {
     }
 
     /// Marks the node as dirty :) hehe, and updates its last (LSN).
-    pub fn mark_dirty(&mut self, lsn: u64) {
-        self.last_lsn = lsn;
+    pub fn mark_dirty(&mut self) {
         self.is_dirty = true;
-    }
-
-    /// Returns the LSN of the last update applied to this node.
-    pub fn get_last_lsn(&self) -> u64 {
-        self.last_lsn
-    }
-
-    /// Sets the provided lsn as `last_lsn` according to the node type.
-    pub fn set_last_lsn(&mut self, lsn: u64) {
-        self.last_lsn = lsn;
     }
 }
 
@@ -297,7 +283,6 @@ impl InternalNode {
 #[derive(Debug, Default, Clone)]
 pub struct LeafNode {
     pub page_id: PageId,
-    pub last_lsn: u64,
     pub has_prev: bool,
     pub has_next: bool,
     pub prev_page_id: PageId,
@@ -326,19 +311,8 @@ impl LeafNode {
     }
 
     /// Marks the node as dirty :) hehe, and updates its last (LSN).
-    pub fn mark_dirty(&mut self, lsn: u64) {
-        self.last_lsn = lsn;
+    pub fn mark_dirty(&mut self) {
         self.is_dirty = true;
-    }
-
-    /// Returns the LSN of the last update applied to this node.
-    pub fn get_last_lsn(&self) -> u64 {
-        self.last_lsn
-    }
-
-    /// Sets the provided lsn as `last_lsn` according to the node type.
-    pub fn set_last_lsn(&mut self, lsn: u64) {
-        self.last_lsn = lsn;
     }
 }
 
@@ -561,35 +535,15 @@ impl BTreeNode {
     }
 
     /// Marks the node as dirty :) hehe, and updates its last (LSN).
-    pub fn mark_dirty(&mut self, lsn: u64) {
+    pub fn mark_dirty(&mut self) {
         use BTreeNode::*;
         match self {
             Internal(node) => {
-                node.last_lsn = lsn;
                 node.is_dirty = true;
             }
             Leaf(node) => {
-                node.last_lsn = lsn;
                 node.is_dirty = true;
             }
-        }
-    }
-
-    /// Returns the LSN of the last update applied to this node.
-    pub fn get_last_lsn(&self) -> u64 {
-        use BTreeNode::*;
-        match self {
-            Internal(node) => node.last_lsn,
-            Leaf(node) => node.last_lsn,
-        }
-    }
-
-    /// Sets the provided lsn as `last_lsn` according to the node type.
-    pub fn set_last_lsn(&mut self, lsn: u64) {
-        use BTreeNode::*;
-        match self {
-            Internal(node) => node.last_lsn = lsn,
-            Leaf(node) => node.last_lsn = lsn,
         }
     }
 }
@@ -685,7 +639,6 @@ impl BTreeNode {
             // LeafNode
             1 => {
                 let file_index = cursor.read_u64();
-                let last_lsn = cursor.read_u64();
                 let has_lsib = cursor.read_u8() != 0;
                 let has_rsib = cursor.read_u8() != 0;
                 let lsib_index = cursor.read_u64();
@@ -714,7 +667,6 @@ impl BTreeNode {
                 }
                 Ok(BTreeNode::Leaf(LeafNode {
                     page_id: PageId(file_index),
-                    last_lsn,
                     has_prev: has_lsib,
                     has_next: has_rsib,
                     prev_page_id: lsib_index.into(),
@@ -728,7 +680,6 @@ impl BTreeNode {
             // InternalNode
             0 => {
                 let file_index = cursor.read_u64();
-                let last_lsn = cursor.read_u64();
                 let right_index = cursor.read_u64();
                 let entry_count = cursor.read_u32();
 
@@ -751,7 +702,6 @@ impl BTreeNode {
                 }
                 Ok(BTreeNode::Internal(InternalNode {
                     page_id: PageId(file_index),
-                    last_lsn,
                     rightmost_child_id: PageId(right_index),
                     slot_array: indices,
                     entries,
@@ -786,7 +736,6 @@ impl BTreeNode {
 
                 cursor.write_u8(NodeType::Leaf as u8);
                 cursor.write_u64(node.page_id.0);
-                cursor.write_u64(node.last_lsn);
                 cursor.write_u8(node.has_prev as u8);
                 cursor.write_u8(node.has_next as u8);
                 cursor.write_u64(node.prev_page_id.into());
@@ -819,7 +768,6 @@ impl BTreeNode {
 
                 cursor.write_u8(NodeType::Internal as u8);
                 cursor.write_u64(node.page_id.0);
-                cursor.write_u64(node.last_lsn);
                 cursor.write_u64(node.rightmost_child_id.into());
 
                 cursor.write_u32(node.slot_array.len() as u32);
@@ -1011,7 +959,6 @@ mod tests {
     fn test_empty_leaf_node_round_trip() -> Result<(), Box<dyn error::Error>> {
         let leaf = LeafNode {
             page_id: PageId(1),
-            last_lsn: 100,
             has_prev: false,
             has_next: false,
             prev_page_id: 0.into(),
@@ -1028,7 +975,6 @@ mod tests {
         let decoded = BTreeNode::decode(&page)?;
         if let BTreeNode::Leaf(dec_leaf) = decoded {
             assert_eq!(dec_leaf.page_id, leaf.page_id);
-            assert_eq!(dec_leaf.last_lsn, leaf.last_lsn);
             assert!(!dec_leaf.has_prev);
             assert!(!dec_leaf.has_next);
             assert!(dec_leaf.slot_array.is_empty());
@@ -1057,7 +1003,6 @@ mod tests {
 
         let leaf = LeafNode {
             page_id: PageId(42),
-            last_lsn: 999,
             has_prev: true,
             has_next: true,
             prev_page_id: 41.into(),
@@ -1107,7 +1052,6 @@ mod tests {
         }
         let leaf = LeafNode {
             page_id: PageId(1),
-            last_lsn: 0,
             has_prev: false,
             has_next: false,
             prev_page_id: 0.into(),
@@ -1143,7 +1087,6 @@ mod tests {
         ];
         let internal = InternalNode {
             page_id: PageId(1),
-            last_lsn: 555,
             rightmost_child_id: PageId(5),
             slot_array: vec![0, 1, 2],
             entries: entries.clone(),
@@ -1156,7 +1099,6 @@ mod tests {
         let decoded = BTreeNode::decode(&page)?;
         if let BTreeNode::Internal(dec_internal) = decoded {
             assert_eq!(dec_internal.page_id, PageId(1));
-            assert_eq!(dec_internal.last_lsn, 555);
             assert_eq!(dec_internal.rightmost_child_id, PageId(5));
             assert_eq!(dec_internal.slot_array.len(), 3);
             assert_eq!(dec_internal.entries[1].key, 200);
@@ -1194,7 +1136,6 @@ mod tests {
         let mut page_1 = Page::new();
         let leaf = LeafNode {
             page_id: page_id_1,
-            last_lsn: 10,
             has_prev: false,
             has_next: false,
             prev_page_id: 0.into(),

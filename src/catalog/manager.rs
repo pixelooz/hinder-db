@@ -221,7 +221,7 @@ impl CatalogManager {
         pool: &BufferPool,
         table_name: String,
         schema: Schema,
-        lsn: u64,
+        txn_id: u64,
     ) -> Result<(), Error> {
         if self.table_roots.contains_key(&table_name) {
             return Err(Error::Duplicate(format!(
@@ -230,7 +230,8 @@ impl CatalogManager {
             )));
         }
         let (root_page_id, root_frame) = pool.new_page(true)?;
-        root_frame.write().mark_dirty(lsn);
+        pool.begin_page_mutation(root_page_id, txn_id)?;
+        root_frame.write().mark_dirty();
 
         // Inserting into sys_table_roots_page
         let sys_table_roots_tree = BpTree::new(pool, SYS_TABLE_ROOTS_ROOT_ID);
@@ -247,7 +248,7 @@ impl CatalogManager {
             .next_sys_row_id
             .fetch_add(1, Ordering::SeqCst);
 
-        sys_table_roots_tree.insert(sys_row_id, roots_buffer, lsn)?;
+        sys_table_roots_tree.insert(sys_row_id, roots_buffer, txn_id)?;
 
         // Insert into sys_schema_page
         let sys_schema_tree = BpTree::new(pool, SYS_SCHEMAS_ROOT_ID);
@@ -267,7 +268,7 @@ impl CatalogManager {
                 .next_sys_row_id
                 .fetch_add(1, Ordering::SeqCst);
 
-            sys_schema_tree.insert(sys_row_id, schema_buffer, lsn)?;
+            sys_schema_tree.insert(sys_row_id, schema_buffer, txn_id)?;
         }
         // Update in-memory cache
         self.table_roots
@@ -287,7 +288,7 @@ impl CatalogManager {
         table_name: String,
         is_unique: bool,
         column_name: String,
-        lsn: u64,
+        txn_id: u64,
     ) -> Result<(), Error> {
         let table_schema = self.get_table_schema(&table_name)?;
         if table_schema.get_col_idx(&column_name).is_err() {
@@ -308,7 +309,8 @@ impl CatalogManager {
             )));
         }
         let (root_page_id, root_frame) = pool.new_page(true)?;
-        root_frame.write().mark_dirty(lsn);
+        pool.begin_page_mutation(root_page_id, txn_id)?;
+        root_frame.write().mark_dirty();
 
         let sys_index_tree = BpTree::new(pool, root_page_id);
         let index_tuple = Tuple::new(vec![
@@ -326,7 +328,7 @@ impl CatalogManager {
         let sys_row_id = self
             .next_sys_row_id
             .fetch_add(1, Ordering::SeqCst);
-        sys_index_tree.insert(sys_row_id, index_buffer, lsn)?;
+        sys_index_tree.insert(sys_row_id, index_buffer, txn_id)?;
 
         let index_meta = IndexMeta {
             index_name: index_name.clone(),
@@ -409,9 +411,9 @@ impl CatalogManager {
                 p1_id, p2_id, p3_id
             )));
         }
-        p1_frame.write().mark_dirty(0);
-        p2_frame.write().mark_dirty(0);
-        p3_frame.write().mark_dirty(0);
+        p1_frame.write().mark_dirty();
+        p2_frame.write().mark_dirty();
+        p3_frame.write().mark_dirty();
         pool.flush_all_pages()?;
         Ok(())
     }

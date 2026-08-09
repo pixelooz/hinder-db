@@ -15,28 +15,8 @@ use crate::{
     planner::Planner,
     relation::tuple::Tuple,
     sql::{lexer::Lexer, parser::Parser},
-    storage::{
-        buffer_pool::{BufferPool, WalFlusher},
-        page::DiskManager,
-        wal::WalManager,
-    },
+    storage::{buffer_pool::BufferPool, page::DiskManager, wal::WalManager},
 };
-
-/// A thread-safe wrapper to allow the BufferPool to trigger Wal flushes even though
-/// the WalManager is locked behind a Mutex.
-///
-/// # TODO:
-/// This feels dirty, idk if this is the correct way to do it, look for other ideas
-/// for being able to pass some flusher to the buffer pool without having to wrap it
-/// in a thousand Arc<Mutex<...>>.
-#[derive(Debug)]
-struct SharedWalFlusher(Arc<Mutex<WalManager>>);
-
-impl WalFlusher for SharedWalFlusher {
-    fn flush_upto(&self, lsn: u64) -> Result<(), Error> {
-        self.0.lock().flush_upto(lsn)
-    }
-}
 
 /// The global instance of our database. It owns all the state of our database and
 /// provides thread-safe access to storage, metadata catalog and enables you to
@@ -45,7 +25,6 @@ impl WalFlusher for SharedWalFlusher {
 pub struct Database {
     buffer_pool: Arc<BufferPool>,
     catalog: Arc<RwLock<CatalogManager>>,
-    wal_manager: Arc<Mutex<WalManager>>,
     next_txn_id: AtomicU64,
 }
 
@@ -59,8 +38,7 @@ impl Database {
         let disk_manager = DiskManager::open(db_path)?;
         let wal_manager = Arc::new(Mutex::new(WalManager::open(wal_path, sync)?));
 
-        let flusher: Arc<dyn WalFlusher> = Arc::new(SharedWalFlusher(Arc::clone(&wal_manager)));
-        let buffer_pool = BufferPool::new(disk_manager, pool_cap, Some(flusher));
+        let buffer_pool = BufferPool::new(disk_manager, pool_cap, wal_manager.clone());
 
         // run the recovery engine here
         let mut catalog = CatalogManager::new();
@@ -69,7 +47,6 @@ impl Database {
         Ok(Self {
             buffer_pool: Arc::new(buffer_pool),
             catalog: Arc::new(RwLock::new(catalog)),
-            wal_manager,
             next_txn_id: AtomicU64::new(1),
         })
     }
@@ -99,12 +76,7 @@ impl<'a> Connection<'a> {
             planner.plan_statement(stmt)?
         };
         let txn_id = self.db.next_txn_id.fetch_add(1, Ordering::SeqCst);
-        let mut ctx = ExecutionContext::new(
-            &self.db.buffer_pool,
-            &self.db.catalog,
-            txn_id,
-            &self.db.wal_manager,
-        );
+        let mut ctx = ExecutionContext::new(&self.db.buffer_pool, &self.db.catalog, txn_id);
         let mut results = Vec::new();
         while let Some(tuple) = executor.next(&mut ctx)? {
             results.push(tuple);
