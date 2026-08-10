@@ -332,7 +332,14 @@ impl BufferPool {
         if let Some(frame) = page_table.get(&evict_id) {
             let mut node_guard = frame.upgradable_read();
             if node_guard.is_dirty() {
-                self.wal_manager.lock().sync()?;
+                let wal_offset = match &*node_guard {
+                    BTreeNode::Internal(node) => node.wal_offset,
+                    BTreeNode::Leaf(node) => node.wal_offset,
+                };
+                let flushed = self.get_wal_manager().lock().flushed_offset();
+                if wal_offset > flushed {
+                    self.wal_manager.lock().sync()?;
+                }
                 let mut raw_page = Page::new();
                 node_guard.encode(&mut raw_page)?;
                 self.disk_manager
