@@ -2,6 +2,7 @@ use std::{
     fs::{File, OpenOptions},
     io::{BufReader, ErrorKind, Read, Seek, SeekFrom, Write},
     path::Path,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use crate::{
@@ -116,34 +117,44 @@ impl WalRecord {
 #[derive(Debug)]
 pub struct WalManager {
     file: File,
-    sync: bool,
+    /// Tracks the absolute offset that has been flushed to the disk.
+    flushed_offset: AtomicU64,
 }
 
 impl WalManager {
     /// Opens an existing wal file in append mode or creates a new one returning
     /// `WalManager` with the fields initialized.
-    pub fn open<P: AsRef<Path>>(path: P, sync: bool) -> Result<Self, Error> {
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(path)?;
+        let size = file.metadata()?.len();
         Ok(Self {
-            file: OpenOptions::new()
-                .create(true)
-                .append(true)
-                .read(true)
-                .open(path)?,
-            sync,
+            file,
+            flushed_offset: AtomicU64::new(size),
         })
-    }
-
-    /// Explicitly syncs the file regardless of the `sync` flag being true or
-    /// false.
-    pub fn sync(&mut self) -> Result<(), Error> {
-        self.file.sync_all()?;
-        Ok(())
     }
 
     /// Returns the current physical size of the Wal file in bytes.
     pub fn size(&self) -> Result<u64, Error> {
         let metadata = self.file.metadata()?;
         Ok(metadata.len())
+    }
+
+    /// Returns the highest flushed wal offset.
+    pub fn flushed_offset(&self) -> u64 {
+        self.flushed_offset.load(Ordering::Acquire)
+    }
+
+    /// Explicitly fsyncs the wal file to the disk and stores the flushed offset.
+    pub fn sync(&mut self) -> Result<(), Error> {
+        self.file.sync_all()?;
+        let offset = self.file.seek(SeekFrom::End(0))?;
+        self.flushed_offset
+            .store(offset, Ordering::Release);
+        Ok(())
     }
 
     /// Appends a single record to the Wal and returns its absolute byte offset.
@@ -200,10 +211,6 @@ impl WalManager {
             buffer.extend_from_slice(&encoded_entry);
         }
         self.file.write_all(&buffer)?;
-
-        if self.sync {
-            self.file.sync_all()?;
-        }
         Ok(())
     }
 
@@ -216,9 +223,6 @@ impl WalManager {
     pub fn truncate(&mut self) -> Result<(), Error> {
         self.file.set_len(0)?;
         self.file.seek(SeekFrom::Start(0))?;
-        if self.sync {
-            self.file.sync_all()?;
-        }
         Ok(())
     }
 

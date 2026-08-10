@@ -16,7 +16,9 @@ use crate::{
     planner::Planner,
     relation::tuple::Tuple,
     sql::{lexer::Lexer, parser::Parser},
-    storage::{buffer_pool::BufferPool, page::DiskManager, wal::WalManager},
+    storage::{
+        buffer_pool::BufferPool, flusher::BackgroundFlusher, page::DiskManager, wal::WalManager,
+    },
 };
 
 /// The global instance of our database. It owns all the state of our database and
@@ -27,17 +29,18 @@ pub struct Database {
     buffer_pool: Arc<BufferPool>,
     catalog: Arc<RwLock<CatalogManager>>,
     next_txn_id: AtomicU64,
+    _flusher: BackgroundFlusher,
 }
 
 impl Database {
     /// Boots the database engine, Recovers from the Wal(todo), initializes the BufferPool,
     /// and bootstrap the in-memory Catalog from the system pages.
-    pub fn open<P>(db_path: P, wal_path: P, pool_cap: usize, sync: bool) -> Result<Self, Error>
+    pub fn open<P>(db_path: P, wal_path: P, pool_cap: usize) -> Result<Self, Error>
     where
         P: AsRef<Path>,
     {
         let disk_manager = DiskManager::open(db_path)?;
-        let wal_manager = Arc::new(Mutex::new(WalManager::open(wal_path, sync)?));
+        let wal_manager = Arc::new(Mutex::new(WalManager::open(wal_path)?));
 
         let buffer_pool = BufferPool::new(disk_manager, pool_cap, wal_manager.clone());
 
@@ -45,10 +48,14 @@ impl Database {
         let mut catalog = CatalogManager::new();
         catalog.bootstrap(&buffer_pool)?;
 
+        let buffer_pool = Arc::new(buffer_pool);
+        let flusher = BackgroundFlusher::start(buffer_pool.clone());
+
         Ok(Self {
-            buffer_pool: Arc::new(buffer_pool),
+            buffer_pool,
             catalog: Arc::new(RwLock::new(catalog)),
             next_txn_id: AtomicU64::new(1),
+            _flusher: flusher,
         })
     }
 
@@ -114,7 +121,7 @@ mod tests {
         let db_path = Path::new("/Volumes/External T7/test_full.db");
         let wal_path = Path::new("/Volumes/External T7/test_full.wal");
 
-        let db = Database::open(db_path, wal_path, 100, true)?;
+        let db = Database::open(db_path, wal_path, 100)?;
         let mut conn = db.connect();
         let tuples = conn.execute("CREATE TABLE users (id INT, name VARCHAR(255))")?;
         dbg!(tuples);

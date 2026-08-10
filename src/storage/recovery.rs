@@ -20,7 +20,7 @@ impl RecoveryEngine {
     where
         P: AsRef<Path>,
     {
-        let mut wal = WalManager::open(path, false)?;
+        let mut wal = WalManager::open(path)?;
         let record_batch = wal.read_batch()?;
 
         // If the wal is completely empty, either the database shut down cleanly

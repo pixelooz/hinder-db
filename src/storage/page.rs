@@ -130,6 +130,9 @@ pub struct InternalNode {
     /// Tracks if the node was modified in memory. Excluded from encoding
     /// decoding.
     pub is_dirty: bool,
+
+    /// In-memory tracker for the Wal offset of this page's Undo record.
+    pub wal_offset: u64,
 }
 
 impl InternalNode {
@@ -294,6 +297,9 @@ pub struct LeafNode {
     /// Tracks if the node was modified in memory. Excluded from encoding
     /// decoding.
     pub is_dirty: bool,
+
+    /// In-memory tracker for the Wal offset of this page's Undo record.
+    pub wal_offset: u64,
 }
 
 impl LeafNode {
@@ -675,6 +681,7 @@ impl BTreeNode {
                     records: cells,
                     free_size,
                     is_dirty: false,
+                    wal_offset: 0,
                 }))
             }
             // InternalNode
@@ -707,6 +714,7 @@ impl BTreeNode {
                     entries,
                     free_size,
                     is_dirty: false,
+                    wal_offset: 0,
                 }))
             }
             val => Err(Error::CorruptPage(format!("Unknown node type: {}", val))),
@@ -967,6 +975,7 @@ mod tests {
             records: vec![],
             free_size: 0, // Will be recalculated during encode
             is_dirty: false,
+            wal_offset: 0,
         };
 
         let mut page = Page::new();
@@ -1012,6 +1021,7 @@ mod tests {
             records: records.clone(),
             free_size: 0,
             is_dirty: false,
+            wal_offset: 0,
         };
 
         let mut page = Page::new();
@@ -1060,6 +1070,7 @@ mod tests {
             records,
             free_size: 0,
             is_dirty: false,
+            wal_offset: 0,
         };
         let mut page = Page::new();
 
@@ -1092,6 +1103,7 @@ mod tests {
             entries: entries.clone(),
             free_size: 0,
             is_dirty: false,
+            wal_offset: 0,
         };
         let mut page = Page::new();
         BTreeNode::Internal(internal).encode(&mut page)?;
@@ -1144,6 +1156,7 @@ mod tests {
             records: vec![make_record(1, b"disk-test", false)],
             free_size: 0,
             is_dirty: false,
+            wal_offset: 0,
         };
         BTreeNode::Leaf(leaf).encode(&mut page_1)?;
         dm.write_page(page_id_1, &page_1)?;

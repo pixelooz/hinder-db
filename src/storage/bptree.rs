@@ -425,7 +425,7 @@ mod tests {
         let _ = fs::remove_file(&db_path);
 
         let disk_manager = DiskManager::open(&db_path).expect("opening DiskManager failed");
-        let wal = WalManager::open(&wal_path, false).unwrap();
+        let wal = WalManager::open(&wal_path).unwrap();
         let wal_manager = Arc::new(Mutex::new(wal));
         let pool = BufferPool::new(disk_manager, 20, wal_manager);
         (pool, db_path, wal_path)

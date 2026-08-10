@@ -159,6 +159,7 @@ impl BufferPool {
         // this page.
         if let Entry::Vacant(entry) = state.undo_logged.entry(page_id) {
             let mut page = Box::new(Page::new());
+
             frame.read().encode(&mut page)?; // Capture the before image.
             let record = WalRecord::Undo {
                 page_id,
@@ -166,6 +167,11 @@ impl BufferPool {
                 txn_id,
             };
             let offset = self.wal_manager.lock().write_record(&record)?;
+
+            match &mut *frame.write() {
+                BTreeNode::Internal(node) => node.wal_offset = offset,
+                BTreeNode::Leaf(node) => node.wal_offset = offset,
+            }
             entry.insert(offset);
         }
         state.dirty_pages.insert(page_id);
@@ -179,6 +185,7 @@ impl BufferPool {
             return Ok(());
         };
         let page_table = self.page_table.read();
+
         let mut batch = Vec::with_capacity(state.dirty_pages.len() + 1);
         for page_id in state.dirty_pages {
             if let Some(frame) = page_table.get(&page_id) {
@@ -192,7 +199,10 @@ impl BufferPool {
             }
         }
         batch.push(WalRecord::Commit { txn_id });
-        self.wal_manager.lock().write_batch(&batch)?;
+
+        let mut wal = self.wal_manager.lock();
+        wal.write_batch(&batch)?;
+        wal.sync()?;
         Ok(())
     }
 
@@ -271,11 +281,18 @@ impl BufferPool {
             None => return Ok(()),
         };
         let mut node_guard = frame.upgradable_read();
-
         if !node_guard.is_dirty() {
             return Ok(());
         }
-        self.wal_manager.lock().sync()?;
+        let offset = match &*node_guard {
+            BTreeNode::Internal(node) => node.wal_offset,
+            BTreeNode::Leaf(node) => node.wal_offset,
+        };
+        let flushed = self.wal_manager.lock().flushed_offset();
+        // Only make a fsync call if this page's Undo record hasn't been written to disk.
+        if offset > flushed {
+            self.wal_manager.lock().sync()?;
+        }
         let mut raw_page = Page::new();
         node_guard.encode(&mut raw_page)?;
         self.disk_manager.write_page(page_id, &raw_page)?;
