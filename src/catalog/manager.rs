@@ -395,9 +395,19 @@ impl CatalogManager {
 
     /// Allocates the baseline system pages for a completely fresh database.
     fn initialize_new_database(&mut self, pool: &BufferPool) -> Result<(), Error> {
+        let sys_txn_id = 0;
+
         let (p1_id, p1_frame) = pool.new_page(true)?;
+        pool.begin_page_mutation(p1_id, sys_txn_id)?;
+        p1_frame.write().mark_dirty();
+
         let (p2_id, p2_frame) = pool.new_page(true)?;
+        pool.begin_page_mutation(p2_id, sys_txn_id)?;
+        p2_frame.write().mark_dirty();
+
         let (p3_id, p3_frame) = pool.new_page(true)?;
+        pool.begin_page_mutation(p3_id, sys_txn_id)?;
+        p3_frame.write().mark_dirty();
 
         if p1_id != SYS_TABLE_ROOTS_ROOT_ID
             || p2_id != SYS_SCHEMAS_ROOT_ID
@@ -405,15 +415,12 @@ impl CatalogManager {
         {
             return Err(Error::CorruptPage(format!(
                 "failed to allocate system pages sequentially
-                sys_table_roots = {:?},
-                sys_schema = {:?},
+                sys_table_roots = {:?}, sys_schema = {:?},
                 sys_index = {:?}",
                 p1_id, p2_id, p3_id
             )));
         }
-        p1_frame.write().mark_dirty();
-        p2_frame.write().mark_dirty();
-        p3_frame.write().mark_dirty();
+        pool.commit_transaction(sys_txn_id)?;
         pool.flush_all_pages()?;
         Ok(())
     }

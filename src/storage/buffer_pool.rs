@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::Entry},
     fmt::Debug,
     sync::Arc,
 };
@@ -20,11 +20,13 @@ use crate::{
 pub type Frame = Arc<RwLock<BTreeNode>>;
 
 /// Tracks active transactions to prevent duplicate Undo logging and facilitate
-/// Commit flushing.
+/// Commit/Abort.
 #[derive(Debug, Default)]
 struct TxnState {
-    /// Pages that have already had their before-image (Undo) logged to the Wal.
-    undo_logged: HashSet<PageId>,
+    /// Maps a modified PageId to its absolute byte offset in the Wal file.
+    /// Used for O(1) retrieval of the Undo record during a runtime abort.
+    undo_logged: HashMap<PageId, u64>,
+
     /// Pages modified by this transaction that need a Redo log on commit.
     dirty_pages: HashSet<PageId>,
 }
@@ -87,6 +89,18 @@ impl BufferPool {
         }
     }
 
+    /// Returns true if there are no active transactions, meaning it is safe
+    /// to truncate the Wal.
+    pub fn can_checkpoint(&self) -> bool {
+        self.active_txns.lock().is_empty()
+    }
+
+    /// Exposes the WalManager to the background flusher for size checking and
+    /// truncation
+    pub fn get_wal_manager(&self) -> Arc<Mutex<WalManager>> {
+        Arc::clone(&self.wal_manager)
+    }
+
     /// Returns true if the underlying physical database is completely empty.
     pub fn is_empty(&self) -> bool {
         self.disk_manager.is_empty()
@@ -143,7 +157,7 @@ impl BufferPool {
         let state = txns.entry(txn_id).or_default();
         // Only log the Undo image if this is the first time this txn is touching
         // this page.
-        if !state.undo_logged.contains(&page_id) {
+        if let Entry::Vacant(entry) = state.undo_logged.entry(page_id) {
             let mut page = Box::new(Page::new());
             frame.read().encode(&mut page)?; // Capture the before image.
             let record = WalRecord::Undo {
@@ -151,8 +165,8 @@ impl BufferPool {
                 page,
                 txn_id,
             };
-            self.wal_manager.lock().write_batch(&[record])?;
-            state.undo_logged.insert(page_id);
+            let offset = self.wal_manager.lock().write_record(&record)?;
+            entry.insert(offset);
         }
         state.dirty_pages.insert(page_id);
         Ok(())
@@ -182,19 +196,72 @@ impl BufferPool {
         Ok(())
     }
 
-    /// Aborts a transaction. Drops all modified pages from memory entirely. By invalidating
-    /// the cache, the next read will fetch the uncorrupted data from disk, effectively
-    /// rolling back the memory state.
-    pub fn abort_transaction(&self, txn_id: u64) {
+    /// Aborts a transaction. Retrieves the original Undo records from the Wal via disk
+    /// seeks using bytes offsets and overwrites the .db file to erase any stolen garbage
+    /// data.
+    ///
+    /// Drops all modified pages from memory entirely.
+    ///
+    /// By invalidating the cache, the next read will fetch the uncorrupted data from disk,
+    /// effectively rolling back the memory state.
+    pub fn abort_transaction(&self, txn_id: u64) -> Result<(), Error> {
         if let Some(state) = self.active_txns.lock().remove(&txn_id) {
             let mut page_table = self.page_table.write();
+            let mut wal = self.wal_manager.lock();
             let mut replacer = self.replacer.lock();
 
-            for page_id in state.dirty_pages {
+            for (page_id, offset) in state.undo_logged {
+                let record = wal.read_record_at(offset)?;
+                if let WalRecord::Undo { page, .. } = record {
+                    // If this page was STEAL'd, this erases the garbage and if it was
+                    // never stolen, this safely overwrites correct data with correct
+                    // data.
+                    self.disk_manager.write_page(page_id, &page)?;
+                } else {
+                    return Err(Error::CorruptPage(
+                        "expected Undo record at cached Wal offset".into(),
+                    ));
+                }
                 page_table.remove(&page_id);
                 replacer.remove(page_id);
             }
         }
+        Ok(())
+    }
+
+    /// Implements the 75/25 high/low watermark cleaning policy, if more that 75% of the
+    /// pool is dirty, it flushes the oldest dirty pages until the dirty count drops to
+    /// 25%, ensuring query threads rarely block on IO.
+    pub fn clean_pages_watermark(&self) -> Result<(), Error> {
+        let dirty_threshold = (self.capacity * 3) / 4;
+        let dirty_allowed = self.capacity / 4;
+
+        // Identify the dirty pages as the eviction candidates.
+        let dirty_page_ids = {
+            let page_table = self.page_table.read();
+            let mut dirty_pages = Vec::new();
+
+            // Get the oldest dirty pages by peeking the lru backwards.
+            let candidates = self.replacer.lock().peek_rev(dirty_threshold);
+            for page_id in candidates {
+                if let Some(frame) = page_table.get(&page_id)
+                    && frame.read().is_dirty()
+                {
+                    dirty_pages.push(page_id);
+                }
+            }
+            dirty_pages
+        };
+        // If the amount of dirty pages is greater than threshold then flush till its not.
+        if dirty_page_ids.len() >= dirty_threshold {
+            let clean_limit = dirty_threshold - dirty_allowed;
+
+            dirty_page_ids
+                .iter()
+                .take(clean_limit)
+                .try_for_each(|&page_id| self.flush_page(page_id))?;
+        }
+        Ok(())
     }
 
     /// Flushes a specific page to disk if it is dirty.

@@ -1,4 +1,5 @@
 use std::{
+    io,
     path::Path,
     sync::{
         Arc,
@@ -77,9 +78,26 @@ impl<'a> Connection<'a> {
         };
         let txn_id = self.db.next_txn_id.fetch_add(1, Ordering::SeqCst);
         let mut ctx = ExecutionContext::new(&self.db.buffer_pool, &self.db.catalog, txn_id);
+
         let mut results = Vec::new();
-        while let Some(tuple) = executor.next(&mut ctx)? {
-            results.push(tuple);
+        loop {
+            match executor.next(&mut ctx) {
+                Ok(None) => {
+                    // pipeline exhausted/finished successfully.
+                    self.db.buffer_pool.commit_transaction(txn_id)?;
+                    break;
+                }
+                Ok(Some(tuple)) => results.push(tuple),
+                Err(err) => {
+                    if let Err(abort_err) = self.db.buffer_pool.abort_transaction(txn_id) {
+                        return Err(Error::Io(io::Error::other(format!(
+                            "transaction failed: {:?}, AND rollback failed {:?}",
+                            err, abort_err,
+                        ))));
+                    }
+                    return Err(err);
+                }
+            }
         }
         Ok(results)
     }

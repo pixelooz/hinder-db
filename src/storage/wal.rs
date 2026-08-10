@@ -146,16 +146,35 @@ impl WalManager {
         Ok(metadata.len())
     }
 
-    /// Writes a single encoded `WalRecord` to the log file.
-    pub fn write_record(&mut self, record: &WalRecord) -> Result<(), Error> {
+    /// Appends a single record to the Wal and returns its absolute byte offset.
+    /// This offset is cached by the BufferPool for Undo retrieval during abort.
+    pub fn write_record(&mut self, record: &WalRecord) -> Result<u64, Error> {
         let encoded = record.encode();
         let len = encoded.len() as u32;
+
+        // Capture the exact offset where this record begins.
+        let offset = self.file.seek(SeekFrom::End(0))?;
+
         self.file.write_all(&len.to_le_bytes())?;
         self.file.write_all(&encoded)?;
-        if self.sync {
-            self.file.sync_all()?;
-        }
-        Ok(())
+
+        Ok(offset)
+    }
+
+    /// Seeks to a specific byte offset and decodes a single Wal record.
+    /// Used for runtime transaction rollback.
+    pub fn read_record_at(&mut self, offset: u64) -> Result<WalRecord, Error> {
+        self.file
+            .seek(SeekFrom::End(offset.try_into().unwrap()))?;
+        let mut len_buf = [0u8; 4];
+
+        self.file.read_exact(&mut len_buf)?;
+        let len = u32::from_le_bytes(len_buf) as usize;
+
+        let mut buffer = vec![0u8; len];
+        self.file.read_exact(&mut buffer)?;
+
+        WalRecord::decode(&buffer)
     }
 
     /// Appends a batch of log entries to the Wal file using 4-byte little-endian
