@@ -400,6 +400,12 @@ impl LeafNode {
                 if !rec.is_deleted {
                     return Err(Error::DuplicateKey(row_id));
                 }
+                // Ensuring overwriting the tombstone won't overflow the 8KiB page.
+                let old_len = rec.data.len();
+                let new_len = payload.len();
+                if new_len > old_len && (new_len - old_len) > self.free_size as usize {
+                    return Err(Error::PageFull);
+                }
                 // overwrite tombstone data in place.
                 rec.is_deleted = false;
                 rec.data = payload;
@@ -443,6 +449,8 @@ impl LeafNode {
     }
 
     /// Overwrites the raw byte payload of an existing record for the given key.
+    /// Returns `Error::PageFull` if the new payload expands beyond available
+    /// free space.
     pub fn update_record(&mut self, row_id: u64, payload: Vec<u8>) -> Result<(), Error> {
         if payload.len() >= MAX_VALUE_SIZE {
             return Err(Error::TupleTooLarge(payload.len()));
@@ -453,6 +461,18 @@ impl LeafNode {
             .map_err(|_| Error::KeyNotFound(row_id))?;
 
         let rec_idx = self.slot_array[update_idx] as usize;
+        let old_len = self.records[rec_idx].data.len();
+        let new_len = payload.len();
+
+        if new_len > old_len {
+            let diff = new_len - old_len;
+            if diff > self.free_size as usize {
+                return Err(Error::PageFull);
+            }
+            self.free_size -= diff as u16;
+        } else {
+            self.free_size += (old_len - new_len) as u16;
+        }
         self.records[rec_idx].data = payload;
         Ok(())
     }
