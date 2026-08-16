@@ -131,6 +131,42 @@ impl<'a> BpTree<'a> {
         Ok(())
     }
 
+    /// Updates an existing record's payload. If the new payload causes the leaf page to
+    /// overflow, it automatically performs a logical delete + new insert to trigger a
+    /// page split.
+    pub fn update(&self, row_id: u64, payload: Vec<u8>, txn_id: u64) -> Result<(), Error> {
+        let mut curr_page_id = self.root_page_id;
+        loop {
+            let frame = self.buffer_pool.fetch_page(curr_page_id)?;
+            match &*frame.read() {
+                BTreeNode::Internal(node) => {
+                    curr_page_id = node.route_key(row_id)?;
+                }
+                _ => break,
+            }
+        }
+        let leaf_frame = self.buffer_pool.fetch_page(curr_page_id)?;
+        let mut node_guard = leaf_frame.write();
+        let BTreeNode::Leaf(leaf) = &mut *node_guard else {
+            unreachable!("should've been a leaf node");
+        };
+        match leaf.update_record(row_id, payload.clone()) {
+            Ok(_) => {
+                leaf.mark_dirty();
+                Ok(())
+            }
+            Err(Error::PageFull) => {
+                leaf.delete_record(row_id)?;
+                leaf.mark_dirty();
+                // drop the guard manually cause insert will acquire one, and if we
+                // (same thread) held onto it while asking for it again, deadlock!
+                drop(node_guard);
+                self.insert(row_id, payload, txn_id)
+            }
+            Err(other_err) => Err(other_err),
+        }
+    }
+
     /// Increases the height of the tree by overwriting the existing root into an `InternalNode`
     /// with just the data of the promoted key and the two new children it points to.
     ///
