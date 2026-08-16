@@ -41,6 +41,9 @@ pub enum Error {
     #[error("DuplicatesNotAllowed: {}", 0)]
     Duplicate(String),
 
+    #[error("IndexConstraint: {}", 0)]
+    ConstraintViolation(String),
+
     #[error("requested table was not found: table_name={0}")]
     TableNotFound(String),
 }

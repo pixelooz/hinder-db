@@ -26,7 +26,7 @@ pub struct Schema {
 }
 
 impl Schema {
-    /// Creates an intialized Schema with the given columns.
+    /// Creates an initialized Schema with the given columns.
     pub fn new(columns: Vec<Column>) -> Self {
         Self { columns }
     }
@@ -34,8 +34,8 @@ impl Schema {
     /// Finds the vector index of a column by its string name.
     ///
     /// # Note
-    /// This could be a HashMap but since row widths are miniscule, contiguous
-    /// memory iterations will generally outperform Map lookups.
+    /// This could be a HashMap but since row widths are minuscule, contiguous
+    /// memory iterations will generally outperform Map look ups.
     pub fn get_col_idx(&self, column_name: &str) -> Result<usize, Error> {
         self.columns
             .iter()

@@ -423,8 +423,8 @@ impl<'a> BpTree<'a> {
         let mut curr_page_id = self.root_page_id;
         loop {
             let frame = self.buffer_pool.fetch_page(curr_page_id)?;
-            let node_gurad = frame.read();
-            match &*node_gurad {
+            let node_guard = frame.read();
+            match &*node_guard {
                 BTreeNode::Internal(node) => {
                     let next_page_id = node.route_key(row_id)?;
                     curr_page_id = next_page_id;

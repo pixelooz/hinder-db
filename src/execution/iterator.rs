@@ -38,11 +38,11 @@ impl BpTreeIterator {
     }
 
     /// Advances the cursor to the next valid, non-deleted record. Fills the provided
-    /// buffer block with raw byte references avoiding allocations for the eventual
+    /// block buffer with raw byte references avoiding allocations for the eventual
     /// read operation.
     ///
     /// Returns `true` if a record was loaded, `false` if scan is exhausted.
-    pub fn next(&mut self, pool: &BufferPool, buffer_block: &mut Vec<u8>) -> Result<bool, Error> {
+    pub fn next(&mut self, pool: &BufferPool, block_buffer: &mut Vec<u8>) -> Result<bool, Error> {
         if !self.initialized {
             let leftmost_leaf = BpTree::get_leftmost_leaf(pool, self.root_page_id)?;
             self.curr_page_id = Some(leftmost_leaf);
@@ -68,8 +68,8 @@ impl BpTreeIterator {
                     // why would I do that?.
                     continue 'inner;
                 }
-                buffer_block.clear();
-                buffer_block.extend_from_slice(&record.data);
+                block_buffer.clear();
+                block_buffer.extend_from_slice(&record.data);
                 return Ok(true);
             }
             if leaf.has_next {

@@ -24,7 +24,7 @@ pub struct ExecutionContext<'a> {
 
     /// A reusable buffer to avoid heap allocation when fetching raw bytes
     /// from pages, defaults as 2KiB.
-    pub buffer_block: Vec<u8>,
+    pub block_buffer: Vec<u8>,
 }
 
 impl<'a> ExecutionContext<'a> {
@@ -33,7 +33,7 @@ impl<'a> ExecutionContext<'a> {
         Self {
             buffer_pool: pool,
             catalog,
-            buffer_block: Vec::with_capacity(2048),
+            block_buffer: Vec::with_capacity(2048),
             txn_id,
         }
     }

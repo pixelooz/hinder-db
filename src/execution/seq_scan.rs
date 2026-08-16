@@ -27,11 +27,11 @@ impl Executor for SeqScanExecutor {
     fn next(&mut self, ctx: &mut ExecutionContext) -> Result<Option<Tuple>, Error> {
         if !self
             .iterator
-            .next(ctx.buffer_pool, &mut ctx.buffer_block)?
+            .next(ctx.buffer_pool, &mut ctx.block_buffer)?
         {
             return Ok(None);
         }
-        let mut cursor = Cursor::new(&ctx.buffer_block);
+        let mut cursor = Cursor::new(&ctx.block_buffer);
         let tuple = Tuple::decode(&self.schema, &mut cursor)?;
         Ok(Some(tuple))
     }

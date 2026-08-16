@@ -129,7 +129,7 @@ impl CatalogManager {
         })?;
         let raw_col_iterator = raw_columns
             .into_iter()
-            .map(|(name, col)| (name, Schema::new(col)));
+            .map(|(name, cols)| (name, Schema::new(cols)));
 
         self.table_schemas.extend(raw_col_iterator);
 
