@@ -114,7 +114,7 @@ impl<'a> Connection<'a> {
 mod tests {
     use std::{error::Error, fs, path::Path};
 
-    use crate::{relation::types::Value, shrimp::Database};
+    use crate::{pellet::Database, relation::types::Value};
 
     fn cleanup_files(db_path: &Path, wal_path: &Path) {
         let _ = fs::remove_file(db_path);

@@ -3,9 +3,9 @@
 mod catalog;
 mod error;
 mod execution;
+mod pellet;
 mod planner;
 mod relation;
-mod shrimp;
 mod sql;
 mod storage;
 
