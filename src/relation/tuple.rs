@@ -74,9 +74,10 @@ impl Tuple {
                             .map_err(Error::Io)?;
                     }
                     _ => {
-                        return Err(Error::CorruptPage(
-                            "value type does not match schema type definition".into(),
-                        ));
+                        return Err(Error::CorruptPage(format!(
+                            "value type {:?} does not match schema type {:?} definition",
+                            value, col.data_type
+                        )));
                     }
                 }
             }

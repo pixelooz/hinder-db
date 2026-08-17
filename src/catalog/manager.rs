@@ -314,13 +314,13 @@ impl CatalogManager {
 
         let sys_index_tree = BpTree::new(pool, root_page_id);
         let index_tuple = Tuple::new(vec![
-            Value::Varchar(table_name.clone()),
             Value::Varchar(index_name.clone()),
+            Value::Varchar(table_name.clone()),
+            Value::Varchar(column_name.clone()),
             Value::Boolean(is_unique),
             Value::BigInt(
                 i64::try_from(root_page_id.0).expect("new index's page id exceeded i64 Max"),
             ),
-            Value::Varchar(column_name.clone()),
         ]);
         let mut index_buffer = Vec::new();
         index_tuple.encode(&sys_index_schema(), &mut index_buffer)?;

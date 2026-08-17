@@ -5,8 +5,10 @@ use crate::{
         create::{CreateExecutor, CreateOperation},
         executor::Executor,
         filter::FilterExecutor,
+        insert::InsertExecutor,
         iterator::BpTreeIterator,
         seq_scan::SeqScanExecutor,
+        value::ValuesExecutor,
     },
     planner::bound_expr::BoundExpr,
     relation::{
@@ -14,7 +16,10 @@ use crate::{
         types::{DataType, Value},
     },
     sql::{
-        ast::{BinaryOperator, CreateIndex, CreateTable, Expr, Select, Statement, TableReference},
+        ast::{
+            BinaryOperator, CreateIndex, CreateTable, Expr, Insert, Select, Statement,
+            TableReference,
+        },
         parser::AstLiteral,
     },
 };
@@ -42,6 +47,7 @@ impl<'a> Planner<'a> {
             CreateTable(stmt) => self.plan_create_table(stmt),
             CreateIndex(stmt) => self.plan_create_index(stmt),
             Select(stmt) => self.plan_select(stmt),
+            Insert(stmt) => self.plan_insert(stmt),
 
             _ => Err(Error::NotImplementedYet(
                 "only select statements are currently supported by the planner".into(),
@@ -76,7 +82,7 @@ impl<'a> Planner<'a> {
         Ok(Box::new(CreateExecutor::new(operation)))
     }
 
-    /// Plan a SELECT query, building a pipeline of SeqScan -> Filter.
+    /// Plans a SELECT query, building a pipeline of SeqScan -> Filter.
     fn plan_select(&self, stmt: Select) -> Result<Box<dyn Executor>, Error> {
         let table_name = match stmt.from {
             Some(TableReference::BaseTable { name, .. }) => name,
@@ -104,6 +110,57 @@ impl<'a> Planner<'a> {
             pipeline = Box::new(FilterExecutor::new(pipeline, bound_predicate));
         }
         Ok(pipeline)
+    }
+
+    /// Converts the logical Insert Ast node into a physical ValuesExec -> InsertExec
+    /// pipeline. Confirms the validity of the statement and handles implicit NULL
+    /// padding for intentionally omitted columns.
+    fn plan_insert(&self, stmt: Insert) -> Result<Box<dyn Executor>, Error> {
+        let schema = self.catalog.get_table_schema(&stmt.table_name)?;
+
+        // If the query omitted the column list (Ex: INSERT INTO users VALUE ...;).
+        // We automatically target all the columns in their schema order.
+        let target_columns = if stmt.columns.is_empty() {
+            (0..schema.columns.len()).collect()
+        } else {
+            let mut indices = Vec::with_capacity(stmt.columns.len());
+            for col_name in stmt.columns {
+                indices.push(schema.get_col_idx(&col_name)?);
+            }
+            indices
+        };
+        let mut bound_values = Vec::with_capacity(target_columns.len());
+
+        for row_exprs in stmt.values {
+            if row_exprs.len() != target_columns.len() {
+                return Err(Error::SyntaxErr(format!(
+                    "INSERT has more/less expressions than target columns. expected {}, got {}",
+                    target_columns.len(),
+                    row_exprs.len(),
+                )));
+            }
+            // A physical row template filled with nulls so that the values being
+            // omitted intentionally compared to original schema will be filled
+            // with nulls and won't error any of the encoders because of missing
+            // data.
+            let mut physical_row = vec![BoundExpr::Constant(Value::Null); schema.columns.len()];
+            for (idx, expr) in row_exprs.iter().enumerate() {
+                let physical_idx = target_columns[idx];
+                let expected_type = schema.columns[physical_idx].data_type;
+                let bound_expr = self.bind_expr(expr, schema, Some(expected_type))?;
+                physical_row[physical_idx] = bound_expr;
+            }
+            bound_values.push(physical_row);
+        }
+        let values_executor = Box::new(ValuesExecutor::new(bound_values));
+        let insert_executor = Box::new(InsertExecutor::new(
+            values_executor,
+            stmt.table_name,
+            /*  TODO: The executors only need to borrow the schema as far as I can see till now.
+            Remodel the ownership after the db is complete. */
+            schema.clone(),
+        ));
+        Ok(insert_executor)
     }
 }
 
@@ -203,7 +260,7 @@ impl<'a> Planner<'a> {
             },
             AstLiteral::Null => Ok(Value::Null),
             AstLiteral::Boolean(val) => match expected_type {
-                Some(DataType::Varchar) | None => Ok(Value::Boolean(*val)),
+                Some(DataType::Boolean) | None => Ok(Value::Boolean(*val)),
                 Some(dt) => Err(Error::SyntaxErr(format!(
                     "type mismatch; cannot coerce boolean literal to {:?}",
                     dt

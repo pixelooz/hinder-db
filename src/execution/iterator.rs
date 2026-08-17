@@ -7,7 +7,7 @@ use crate::{
     },
 };
 
-/// A forward-only cursor for scanning BpTree leaf pages. Uses lazy intialization
+/// A forward-only cursor for scanning BpTree leaf pages. Uses lazy initialization
 /// to defer disk IO until the first tuple is actually requested by the execution
 /// pipeline.
 #[derive(Debug)]
@@ -57,7 +57,7 @@ impl BpTreeIterator {
                     "bptree iterator encountered a non-leaf page".into(),
                 ));
             };
-            'inner: while self.curr_slot_idx <= leaf.slot_array.len() {
+            'inner: while self.curr_slot_idx < leaf.slot_array.len() {
                 let rec_idx = leaf.slot_array[self.curr_slot_idx] as usize;
                 let record = &leaf.records[rec_idx];
 

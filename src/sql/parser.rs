@@ -307,6 +307,9 @@ impl<'a> Parser<'a> {
     ///
     /// ```sql
     /// INSERT INTO table_name (col1, col2) VALUES (val1, val2), (val3, val4), (...);
+    ///
+    /// Also supports implicit insertions:
+    /// INSERT INTO table_name VALUES (val1, val2), (val3, val4), (...);
     /// ```
     fn parse_insert(&mut self) -> Result<Insert, Error> {
         self.consume(&Token::Insert)?;

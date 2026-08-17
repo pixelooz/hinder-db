@@ -30,10 +30,10 @@ pub fn sys_schema_schema() -> Schema {
 /// Tracks secondary indexes mapped to base tables.
 pub fn sys_index_schema() -> Schema {
     Schema::new(vec![
-        Column::new("table_name", DataType::Varchar, Some(255)),
         Column::new("index_name", DataType::Varchar, Some(255)),
+        Column::new("table_name", DataType::Varchar, Some(255)),
         Column::new("column_name", DataType::Varchar, Some(255)),
-        Column::new("root_page_id", DataType::BigInt, None),
         Column::new("is_unique", DataType::Boolean, None),
+        Column::new("root_page_id", DataType::BigInt, None),
     ])
 }
