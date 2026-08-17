@@ -42,7 +42,11 @@ impl BpTreeIterator {
     /// read operation.
     ///
     /// Returns `true` if a record was loaded, `false` if scan is exhausted.
-    pub fn next(&mut self, pool: &BufferPool, block_buffer: &mut Vec<u8>) -> Result<bool, Error> {
+    pub fn next(
+        &mut self,
+        pool: &BufferPool,
+        block_buffer: &mut Vec<u8>,
+    ) -> Result<Option<u64>, Error> {
         if !self.initialized {
             let leftmost_leaf = BpTree::get_leftmost_leaf(pool, self.root_page_id)?;
             self.curr_page_id = Some(leftmost_leaf);
@@ -70,7 +74,7 @@ impl BpTreeIterator {
                 }
                 block_buffer.clear();
                 block_buffer.extend_from_slice(&record.data);
-                return Ok(true);
+                return Ok(Some(record.row_id));
             }
             if leaf.has_next {
                 self.curr_slot_idx = 0;
@@ -79,6 +83,6 @@ impl BpTreeIterator {
                 self.curr_page_id = None
             }
         }
-        Ok(false)
+        Ok(None)
     }
 }

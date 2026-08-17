@@ -11,13 +11,20 @@ use crate::{
 /// The in-memory representation of a single database row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tuple {
+    /// The values/columns of a table's row.
     pub values: Vec<Value>,
+
+    /// The row identifier, also could be the primary key if configured.
+    /// The encoder/decoder ignore this field cause its technically not
+    /// part of tuple. This is only so the executors can have row_id
+    /// when needed.
+    pub row_id: Option<u64>,
 }
 
 impl Tuple {
     /// Constructs an initialized Tuple with the provided `values`.
     pub fn new(values: Vec<Value>) -> Self {
-        Self { values }
+        Self { values, row_id: None }
     }
 
     /// Extracts a reference to a specific column's value by name, or an error
@@ -146,7 +153,7 @@ impl Tuple {
             }
             values.push(Value::Null);
         }
-        Ok(Self { values })
+        Ok(Self { values, row_id: None })
     }
 }
 

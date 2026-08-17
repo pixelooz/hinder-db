@@ -260,6 +260,10 @@ impl InternalNode {
 
     /// Evaluates internal routing brackets using O(log N) binary search to determine
     /// the PageId of the child node containing `target_key`.
+    ///
+    /// If current page does not directly points to the `target_key`/holds a reference
+    /// it'll return its rightmost child's page_id. It's supposed to be called in a
+    /// loop where new page is fetched until the target is found or node is exhausted.
     pub fn route_key(&self, target_key: u64) -> Result<PageId, Error> {
         let slot_idx = self.slot_array.partition_point(|&entry_idx| {
             // Find the first index where entry.key > target_key as that is

@@ -433,6 +433,32 @@ impl<'a> BpTree<'a> {
             }
         }
     }
+
+    /// Logically deletes a record by marking it with a tombstone, which in the
+    /// future will be cleaned up by running VACCUM.
+    pub fn delete_record(&self, row_id: u64, txn_id: u64) -> Result<(), Error> {
+        let mut curr_page_id = self.root_page_id;
+        loop {
+            let frame = self.buffer_pool.fetch_page(curr_page_id)?;
+            let node_guard = frame.read();
+            match &*node_guard {
+                BTreeNode::Internal(node) => curr_page_id = node.route_key(row_id)?,
+                _ => break,
+            }
+        }
+        self.buffer_pool
+            .begin_page_mutation(curr_page_id, txn_id)?;
+
+        let leaf_frame = self.buffer_pool.fetch_page(curr_page_id)?;
+        let mut leaf_guard = leaf_frame.write();
+
+        let BTreeNode::Leaf(leaf) = &mut *leaf_guard else {
+            unreachable!("should not be anything but a leaf node");
+        };
+        leaf.delete_record(row_id)?;
+        leaf.mark_dirty();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
