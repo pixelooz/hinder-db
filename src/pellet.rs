@@ -72,8 +72,8 @@ pub struct Connection<'a> {
 
 impl<'a> Connection<'a> {
     /// Parses, plans, and executes a raw SQL string, returning a collection of Tuples.
-    pub fn execute(&mut self, sql: &str) -> Result<Vec<Tuple>, Error> {
-        let lexer = Lexer::new(sql);
+    pub fn execute(&mut self, query: &str) -> Result<Vec<Tuple>, Error> {
+        let lexer = Lexer::new(query);
 
         let mut parser = Parser::new(lexer)?;
         let stmt = parser.parse_statement()?;
@@ -112,22 +112,38 @@ impl<'a> Connection<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error, fs, path::Path};
+    use std::{
+        error::Error,
+        fs,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use crate::{pellet::Database, relation::types::Value};
 
-    fn cleanup_files(db_path: &Path, wal_path: &Path) {
+    static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    /// Generate unique db paths and if some already exists delete them.
+    fn setup_db_test(test_name: &str) -> (String, String) {
+        let count = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let db_path = format!("/Volumes/External T7/test_{}_{}.db", test_name, count);
+        let wal_path = format!("/Volumes/External T7/test_{}_{}.wal", test_name, count);
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_file(&wal_path);
+        (db_path, wal_path)
+    }
+
+    fn cleanup_files(db_path: &str, wal_path: &str) {
         let _ = fs::remove_file(db_path);
         let _ = fs::remove_file(wal_path);
     }
 
     #[test]
     fn test_create_table_demo() -> Result<(), Box<dyn Error>> {
-        let wal_path = Path::new("/Volumes/External T7/create_table.wal");
-        let db_path = Path::new("/Volumes/External T7/create_table.db");
+        let wal_path = format!("/Volumes/External T7/create_table.wal");
+        let db_path = format!("/Volumes/External T7/create_table.db");
         cleanup_files(&db_path, &wal_path);
 
-        let db = Database::open(db_path, wal_path, 100)?;
+        let db = Database::open(&db_path, &wal_path, 100)?;
         let mut conn = db.connect();
         let tuples = conn.execute("CREATE TABLE users (id INT, name VARCHAR(255))")?;
         dbg!(tuples);
@@ -137,12 +153,12 @@ mod tests {
     }
 
     #[test]
-    fn end_to_end_create_and_insert() -> Result<(), Box<dyn Error>> {
-        let wal_path = Path::new("/Volumes/External T7/create_and_insert.wal");
-        let db_path = Path::new("/Volumes/External T7/create_and_insert.db");
+    fn end_to_end_create_and_insert() {
+        let wal_path = format!("/Volumes/External T7/create_and_insert.wal");
+        let db_path = format!("/Volumes/External T7/create_and_insert.db");
         cleanup_files(&db_path, &wal_path);
 
-        let db = Database::open(db_path, wal_path, 100).expect("Failed to boot database");
+        let db = Database::open(&db_path, &wal_path, 100).expect("Failed to boot database");
         let mut conn = db.connect();
 
         let create_table_sql = "CREATE TABLE users (id INT, name VARCHAR(50), infinite_money BIGINT, is_broke BOOLEAN);";
@@ -205,7 +221,52 @@ mod tests {
         assert_eq!(select_res[1].values[1], Value::Varchar("Parth2".into()));
         assert_eq!(select_res[2].values[1], Value::Varchar("Juhi2".into()));
 
-        cleanup_files(db_path, wal_path);
-        Ok(())
+        cleanup_files(&db_path, &wal_path);
+    }
+
+    #[test]
+    fn test_crud_and_secondary_index_maintenance() {
+        let (db_path, wal_path) = setup_db_test("crud");
+
+        let db = Database::open(&db_path, &wal_path, 20).unwrap();
+        let mut conn = db.connect();
+
+        let mut query = "CREATE TABLE users (id INT, name VARCHAR(255), age INT);";
+        conn.execute(query).unwrap();
+
+        query = "CREATE INDEX idx_age ON users(age);";
+        conn.execute(query).unwrap();
+
+        query = "INSERT INTO users VALUES (1, 'Alice', 30), (2, 'Bob', 30), (3, 'Charlie', 40);";
+        conn.execute(query).unwrap();
+
+        query = "SELECT * FROM users WHERE age = 30;";
+        let res = conn.execute(query).unwrap();
+        assert_eq!(res.len(), 2, "Should find two users with age 30");
+
+        // This forces the UpdateExecutor to remove 'Bob' from the '30' posting list
+        // and add him to '35'
+        query = "UPDATE users SET age = 35 WHERE name = 'Bob';";
+        conn.execute(query).unwrap();
+
+        query = "SELECT * FROM users WHERE age = 30;";
+        let res_30 = conn.execute(query).unwrap();
+
+        assert_eq!(res_30.len(), 1, "Only Alice should remain at age 30");
+        assert_eq!(res_30[0].values[1], Value::Varchar("Alice".into()));
+
+        query = "SELECT * FROM users WHERE age = 35;";
+        let res_35 = conn.execute(query).unwrap();
+
+        assert_eq!(res_35.len(), 1, "Bob should now be at age 35");
+        assert_eq!(res_35[0].values[1], Value::Varchar("Bob".into()));
+
+        query = "DELETE FROM users WHERE name = 'Charlie';";
+        conn.execute(query).unwrap();
+
+        let res_all = conn.execute("SELECT * FROM users;").unwrap();
+        assert_eq!(res_all.len(), 2, "Charlie should be deleted");
+
+        cleanup_files(&db_path, &wal_path);
     }
 }
