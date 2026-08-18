@@ -6,4 +6,5 @@ pub(crate) mod filter;
 pub(crate) mod insert;
 pub(crate) mod iterator;
 pub(crate) mod seq_scan;
+pub(crate) mod update;
 pub(crate) mod value;
