@@ -278,6 +278,17 @@ impl<'a> BpTree<'a> {
         };
         match parent_node.insert_entry(promoted_key, child_page_id) {
             Err(Error::PageFull) => {
+                // Trying compaction before splitting. There might be number of tombstones
+                // so we attempt to remove them.
+                parent_node.compact();
+                if parent_node
+                    .insert_entry(promoted_key, child_page_id.clone())
+                    .is_ok()
+                {
+                    parent_node.mark_dirty();
+                    return Ok(None);
+                }
+                // If it still fails, the page is actually full, so we fall through.
                 self.split_internal(parent_node, promoted_key, child_page_id, txn_id)
             }
             Ok(()) => {
@@ -356,7 +367,18 @@ impl<'a> BpTree<'a> {
             }
             Err(Error::DuplicateKey(key)) => return Err(Error::DuplicateKey(key)),
             Err(Error::PageFull) => {
-                // physical page capacity exceeded, we'll split the page below.
+                // Trying compaction before splitting. There might be number of tombstones
+                // so we attempt to remove them.
+                left_leaf.compact();
+                if left_leaf
+                    .insert_record(row_id, payload.clone())
+                    .is_ok()
+                {
+                    left_leaf.mark_dirty();
+                    return Ok(None);
+                }
+                // If it still fails, the page is actually full, so we fall through
+                // and do what we do.
             }
             Err(err) => return Err(err),
         }

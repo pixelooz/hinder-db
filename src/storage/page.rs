@@ -193,12 +193,7 @@ impl InternalNode {
             child_page_id: new_left_child,
         });
         self.slot_array.insert(insert_idx, new_entry_idx);
-
-        if (self.free_size as usize) >= required_bytes {
-            self.free_size -= required_bytes as u16;
-        } else {
-            self.free_size = 0;
-        }
+        self.free_size = (PAGE_SIZE - (current_size + required_bytes)) as u16;
         Ok(())
     }
 
@@ -416,9 +411,24 @@ impl LeafNode {
                 self.compact();
                 Ok(())
             }
-            // key does not exist, so insert_idx will the index where it should be.
+            // key does not exist, so insert_idx will return where the index should be: `insert_idx`.
             Err(insert_idx) => {
+                /*
+                The indexing math below to ensure page doesn't overflow and cause errors:
+
+                Required size for any new insert: `required_bytes`
+
+                           SLOT_ELEM_SIZE               RECORD_META_SIZE        payload
+                [index of the record in slot array] + [record's metadata] + [record itself]
+
+                Header that needs to be accounted for before any new insert to ensure page limits:
+                `header_len`
+
+                LEAF_NODE_HE....       self.slot_array.len()  +     1        *    SLOT_ELEM_SIZE
+                [The leaf header] + [(The existing slot_array + the new one) * space each slot takes]
+                */
                 let required_bytes = SLOT_ELEM_SIZE + RECORD_META_SIZE + payload.len();
+
                 let header_len =
                     LEAF_NODE_HEADER_SIZE + ((self.slot_array.len() + 1) * SLOT_ELEM_SIZE);
 
@@ -434,18 +444,14 @@ impl LeafNode {
                     return Err(Error::PageFull);
                 }
                 let new_rec_idx = self.records.len() as u16;
+
                 self.records.push(Record {
                     row_id,
                     data: payload,
                     is_deleted: false,
                 });
                 self.slot_array.insert(insert_idx, new_rec_idx);
-
-                if (self.free_size as usize) >= required_bytes {
-                    self.free_size -= required_bytes as u16;
-                } else {
-                    self.free_size = 0;
-                }
+                self.free_size = (PAGE_SIZE - (header_len + footer_len + required_bytes)) as u16;
                 Ok(())
             }
         }
@@ -529,14 +535,18 @@ pub enum BTreeNode {
 impl BTreeNode {
     pub fn new_empty(page_id: PageId, is_leaf: bool) -> Self {
         if is_leaf {
+            let free_size = (PAGE_SIZE - LEAF_NODE_HEADER_SIZE) as u16;
             let leaf_node = LeafNode {
                 page_id,
+                free_size,
                 ..Default::default()
             };
             return Self::Leaf(leaf_node);
         }
+        let free_size = (PAGE_SIZE - INTERNAL_NODE_HEADER_SIZE) as u16;
         let internal_node = InternalNode {
             page_id,
+            free_size,
             ..Default::default()
         };
         Self::Internal(internal_node)
@@ -667,7 +677,7 @@ impl BTreeNode {
         match cursor.read_u8() {
             // LeafNode
             1 => {
-                let file_index = cursor.read_u64();
+                let page_id = cursor.read_u64();
                 let has_lsib = cursor.read_u8() != 0;
                 let has_rsib = cursor.read_u8() != 0;
                 let lsib_index = cursor.read_u64();
@@ -695,7 +705,7 @@ impl BTreeNode {
                     };
                 }
                 Ok(BTreeNode::Leaf(LeafNode {
-                    page_id: PageId(file_index),
+                    page_id: page_id.into(),
                     has_prev: has_lsib,
                     has_next: has_rsib,
                     prev_page_id: lsib_index.into(),
@@ -779,12 +789,12 @@ impl BTreeNode {
                 cursor.write_u16(free_size);
                 cursor.pos += free_size as usize;
 
-                for &index in &node.slot_array {
-                    let cell = &node.records[index as usize];
-                    cursor.write_u64(cell.row_id);
-                    cursor.write_u8(cell.is_deleted as u8);
-                    cursor.write_u32(cell.data.len() as u32);
-                    cursor.write_bytes(&cell.data);
+                for &rec_idx in &node.slot_array {
+                    let record = &node.records[rec_idx as usize];
+                    cursor.write_u64(record.row_id);
+                    cursor.write_u8(record.is_deleted as u8);
+                    cursor.write_u32(record.data.len() as u32);
+                    cursor.write_bytes(&record.data);
                 }
             }
             BTreeNode::Internal(node) => {
