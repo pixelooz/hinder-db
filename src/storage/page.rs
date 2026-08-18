@@ -207,7 +207,7 @@ impl InternalNode {
     /// from this level.
     ///
     /// Returns the middle key that was removed from this node.
-    pub fn split(&mut self, new_sibling: &mut InternalNode) -> Result<u64, Error> {
+    pub fn split(&mut self, new_sibling: &mut InternalNode) -> u64 {
         let mid = self.slot_array.len() / 2;
 
         let entry_idx = self.slot_array[mid] as usize;
@@ -230,7 +230,7 @@ impl InternalNode {
         self.slot_array.truncate(mid);
         self.compact();
         new_sibling.compact(); // This line isn't necessary but I'm being safe.
-        Ok(promoted_entry.key)
+        promoted_entry.key
     }
 
     /// Re-writes the entries into a clean vector ordered by slot index and also
@@ -264,7 +264,7 @@ impl InternalNode {
     /// If current page does not directly points to the `target_key`/holds a reference
     /// it'll return its rightmost child's page_id. It's supposed to be called in a
     /// loop where new page is fetched until the target is found or node is exhausted.
-    pub fn route_key(&self, target_key: u64) -> Result<PageId, Error> {
+    pub fn route_key(&self, target_key: u64) -> PageId {
         let slot_idx = self.slot_array.partition_point(|&entry_idx| {
             // Find the first index where entry.key > target_key as that is
             // the internal node-point pointing to the leaf where the
@@ -275,11 +275,11 @@ impl InternalNode {
         // If partition_idx == len(), target_key is >= all routing keys in
         // this node. Route to the rightmost child pointer
         if slot_idx == self.slot_array.len() {
-            Ok(self.rightmost_child_id)
+            self.rightmost_child_id
         } else {
             let entry_idx = self.slot_array[slot_idx] as usize;
             let page_id = self.entries[entry_idx].child_page_id;
-            Ok(page_id)
+            page_id
         }
     }
 }
