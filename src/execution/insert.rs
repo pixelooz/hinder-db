@@ -1,13 +1,9 @@
-use std::{
-    collections,
-    hash::{Hash, Hasher},
-    io::Cursor,
-};
+use std::io::Cursor;
 
 use crate::{
     error::Error,
-    execution::executor::{ExecutionContext, Executor},
-    relation::{schema::Schema, tuple::Tuple, types::Value},
+    execution::executor::{ExecutionContext, Executor, encode_secondary_key},
+    relation::{schema::Schema, tuple::Tuple},
     storage::bptree::BpTree,
 };
 
@@ -30,30 +26,6 @@ impl InsertExecutor {
             child,
             table_name,
             schema,
-        }
-    }
-
-    /// Computes 64 bit BTree routing key from any supported value type. Uses xor based
-    /// order-preserving conversion for numbers hashes for strings.
-    fn encode_secondary_key(value: &Value) -> u64 {
-        match value {
-            // Flip the highest bit to preserve sorting order when converting from
-            // signed to unsigned.
-            Value::BigInt(val) => (*val as u64) ^ (1 << 63),
-            Value::Int(val) => ((*val as i64) as u64) ^ (1 << 63),
-            Value::Null => 0,
-            Value::Boolean(val) => {
-                if *val {
-                    1
-                } else {
-                    0
-                }
-            }
-            Value::Varchar(val) => {
-                let mut hasher = collections::hash_map::DefaultHasher::new();
-                val.hash(&mut hasher);
-                hasher.finish()
-            }
         }
     }
 }
@@ -94,7 +66,7 @@ impl Executor for InsertExecutor {
             let col_idx = self.schema.get_col_idx(&index_meta.column_name)?;
             let col_val = &tuple.values[col_idx];
 
-            let sec_key = Self::encode_secondary_key(col_val);
+            let sec_key = encode_secondary_key(col_val);
             let sec_tree = BpTree::new(ctx.buffer_pool, index_meta.root_page_id);
 
             // The payload for a secondary index is an array or primary row ids.
