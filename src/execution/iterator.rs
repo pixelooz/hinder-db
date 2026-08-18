@@ -27,7 +27,8 @@ pub struct BpTreeIterator {
 }
 
 impl BpTreeIterator {
-    /// Initializes a new iterator starting at the given leftmost leaf page.
+    /// Initializes a new iterator starting at the given root_page_id, calling `next`
+    /// will automatically fetch the leftmost_leaf_page *once* and start serving data.
     pub fn new(root_page_id: PageId) -> Self {
         Self {
             root_page_id,

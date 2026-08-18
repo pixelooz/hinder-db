@@ -12,9 +12,9 @@ use crate::{
 };
 
 /// Maps a column index to the new expression that should overwrite it.
-pub struct Assignment {
-    col_idx: usize,
-    expr: BoundExpr,
+pub struct ExecAssignment {
+    pub col_idx: usize,
+    pub expr: BoundExpr,
 }
 
 /// A mutation `Executor` that modifies tuples in the database.
@@ -22,23 +22,19 @@ pub struct UpdateExecutor {
     child: Box<dyn Executor>,
     table_name: String,
     schema: Schema,
-    assignments: Vec<Assignment>,
+    exec_assigns: Vec<ExecAssignment>,
 }
 
 impl UpdateExecutor {
     /// Constructor.
+    #[rustfmt::skip]
     pub fn new(
         child: Box<dyn Executor>,
         table_name: String,
         schema: Schema,
-        assignments: Vec<Assignment>,
+        exec_assigns: Vec<ExecAssignment>,
     ) -> Self {
-        Self {
-            child,
-            table_name,
-            schema,
-            assignments,
-        }
+        Self {child, table_name, schema, exec_assigns}
     }
 }
 
@@ -53,9 +49,9 @@ impl Executor for UpdateExecutor {
         let mut new_tuple = old_tuple.clone();
 
         // Constructs the new logical tuple by applying the assignments.
-        for assignment in &self.assignments {
-            let new_value = Evaluator::evaluate(&assignment.expr, &old_tuple)?;
-            new_tuple.values[assignment.col_idx] = new_value;
+        for exec_assign in &self.exec_assigns {
+            let new_value = Evaluator::evaluate(&exec_assign.expr, &old_tuple)?;
+            new_tuple.values[exec_assign.col_idx] = new_value;
         }
         let primary_root_id = ctx
             .catalog

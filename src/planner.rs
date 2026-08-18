@@ -3,11 +3,13 @@ use crate::{
     error::Error,
     execution::{
         create::{CreateExecutor, CreateOperation},
+        delete::DeleteExecutor,
         executor::Executor,
         filter::FilterExecutor,
         insert::InsertExecutor,
         iterator::BpTreeIterator,
         seq_scan::SeqScanExecutor,
+        update::{ExecAssignment, UpdateExecutor},
         value::ValuesExecutor,
     },
     planner::bound_expr::BoundExpr,
@@ -17,8 +19,8 @@ use crate::{
     },
     sql::{
         ast::{
-            BinaryOperator, CreateIndex, CreateTable, Expr, Insert, Select, Statement,
-            TableReference,
+            BinaryOperator, CreateIndex, CreateTable, Delete, Expr, Insert, Select, Statement,
+            TableReference, Update,
         },
         parser::AstLiteral,
     },
@@ -48,6 +50,8 @@ impl<'a> Planner<'a> {
             CreateIndex(stmt) => self.plan_create_index(stmt),
             Select(stmt) => self.plan_select(stmt),
             Insert(stmt) => self.plan_insert(stmt),
+            Delete(stmt) => self.plan_delete(stmt),
+            Update(stmt) => self.plan_update(stmt),
 
             _ => Err(Error::NotImplementedYet(
                 "only select statements are currently supported by the planner".into(),
@@ -161,6 +165,65 @@ impl<'a> Planner<'a> {
             schema.clone(),
         ));
         Ok(insert_executor)
+    }
+
+    /// Translates the Ast Delete node into a physical `SeqScan -> Filter -> Delete` pipeline.
+    /// Binds the optional where predicate if present.
+    fn plan_delete(&self, stmt: Delete) -> Result<Box<dyn Executor>, Error> {
+        let root_page_id = self.catalog.get_table_root(&stmt.table_name)?;
+        let schema = self.catalog.get_table_schema(&stmt.table_name)?;
+
+        let iterator = BpTreeIterator::new(root_page_id);
+        let mut pipeline: Box<dyn Executor> =
+            Box::new(SeqScanExecutor::new(iterator, schema.clone()));
+
+        if let Some(where_expr) = stmt.where_clause {
+            let bound_predicate = self.bind_expr(&where_expr, schema, Some(DataType::Boolean))?;
+            pipeline = Box::new(FilterExecutor::new(pipeline, bound_predicate));
+        }
+        Ok(Box::new(DeleteExecutor::new(
+            pipeline,
+            stmt.table_name,
+            schema.clone(),
+        )))
+    }
+
+    /// Translates the Ast Update node into a physical `SeqScan -> Filter -> Update` pipeline.
+    /// Performs type checking on all the SET assignments against the schema.
+    fn plan_update(&self, stmt: Update) -> Result<Box<dyn Executor>, Error> {
+        let root_page_id = self.catalog.get_table_root(&stmt.table_name)?;
+        let schema = self.catalog.get_table_schema(&stmt.table_name)?;
+
+        let iterator = BpTreeIterator::new(root_page_id);
+        let mut pipeline: Box<dyn Executor> =
+            Box::new(SeqScanExecutor::new(iterator, schema.clone()));
+
+        if let Some(where_expr) = stmt.where_clause {
+            let bound_expr = self.bind_expr(&where_expr, schema, Some(DataType::Boolean))?;
+            pipeline = Box::new(FilterExecutor::new(pipeline, bound_expr));
+        }
+        let mut exec_assignments = Vec::with_capacity(stmt.assignments.len());
+
+        // Binds and type-checks the SET assignments.
+        for ast_assign in stmt.assignments {
+            let col_idx = schema.get_col_idx(&ast_assign.column_name)?;
+            let expected_type = Some(schema.columns[col_idx].data_type);
+
+            // Binds the assigned value to the datatype of the column and errs
+            // immediately if the data_types are different than expected.
+            // `SET age = 'string'` will return a SyntaxError.
+            let bound_expr = self.bind_expr(&ast_assign.value, schema, expected_type)?;
+            exec_assignments.push(ExecAssignment {
+                col_idx,
+                expr: bound_expr,
+            });
+        }
+        Ok(Box::new(UpdateExecutor::new(
+            pipeline,
+            stmt.table_name,
+            schema.clone(),
+            exec_assignments,
+        )))
     }
 }
 
