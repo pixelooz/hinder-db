@@ -175,8 +175,7 @@ impl WalManager {
     /// Seeks to a specific byte offset and decodes a single Wal record.
     /// Used for runtime transaction rollback.
     pub fn read_record_at(&mut self, offset: u64) -> Result<WalRecord, Error> {
-        self.file
-            .seek(SeekFrom::End(offset.try_into().unwrap()))?;
+        self.file.seek(SeekFrom::Start(offset))?;
         let mut len_buf = [0u8; 4];
 
         self.file.read_exact(&mut len_buf)?;
