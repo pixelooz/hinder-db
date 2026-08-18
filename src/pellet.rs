@@ -95,14 +95,14 @@ impl<'a> Connection<'a> {
                     break;
                 }
                 Ok(Some(tuple)) => results.push(tuple),
-                Err(err) => {
+                Err(exec_err) => {
                     if let Err(abort_err) = self.db.buffer_pool.abort_transaction(txn_id) {
                         return Err(Error::Io(io::Error::other(format!(
                             "transaction failed: {:?}, AND rollback failed {:?}",
-                            err, abort_err,
+                            exec_err, abort_err,
                         ))));
                     }
-                    return Err(err);
+                    return Err(exec_err);
                 }
             }
         }
@@ -113,12 +113,11 @@ impl<'a> Connection<'a> {
 #[cfg(test)]
 mod tests {
     use std::{
-        error::Error,
         fs,
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use crate::{pellet::Database, relation::types::Value};
+    use crate::{error::Error, pellet::Database, relation::types::Value};
 
     static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -138,18 +137,19 @@ mod tests {
     }
 
     #[test]
-    fn test_create_table_demo() -> Result<(), Box<dyn Error>> {
+    fn test_create_table_demo() {
         let wal_path = format!("/Volumes/External T7/create_table.wal");
         let db_path = format!("/Volumes/External T7/create_table.db");
         cleanup_files(&db_path, &wal_path);
 
-        let db = Database::open(&db_path, &wal_path, 100)?;
+        let db = Database::open(&db_path, &wal_path, 100).unwrap();
         let mut conn = db.connect();
-        let tuples = conn.execute("CREATE TABLE users (id INT, name VARCHAR(255))")?;
+        let tuples = conn
+            .execute("CREATE TABLE users (id INT, name VARCHAR(255))")
+            .unwrap();
         dbg!(tuples);
 
         cleanup_files(&db_path, &wal_path);
-        Ok(())
     }
 
     #[test]
@@ -267,6 +267,69 @@ mod tests {
         let res_all = conn.execute("SELECT * FROM users;").unwrap();
         assert_eq!(res_all.len(), 2, "Charlie should be deleted");
 
+        cleanup_files(&db_path, &wal_path);
+    }
+
+    #[test]
+    fn test_unique_constraint_and_runtime_rollback() {
+        let (db_path, wal_path) = setup_db_test("rollback");
+        let db = Database::open(&db_path, &wal_path, 50).unwrap();
+        let mut conn = db.connect();
+
+        conn.execute("CREATE TABLE accounts (id INT, email VARCHAR(255));")
+            .expect("CREATE TABLE accounts failed");
+
+        conn.execute("CREATE UNIQUE INDEX idx_email ON accounts (email);")
+            .expect("CREATE UNIQUE index failed");
+
+        conn.execute("INSERT INTO accounts VALUES (1, 'test@example.com');")
+            .expect("INSERT INTO accounts failed");
+
+        // Attempt to insert duplicate email, should fail.
+        let err_res = conn.execute("INSERT INTO accounts VALUES (2, 'test@example.com');");
+        assert!(err_res.is_err(), "Expected unique constraint violation");
+
+        if let Err(Error::ConstraintViolation(msg)) = err_res {
+            assert!(
+                msg.contains("unique constraint"),
+                "Wrong error type returned"
+            );
+        } else {
+            panic!("Expected ConstraintViolation error, got {:#?}", err_res);
+        }
+        // VERIFY ROLLBACK: The primary table should NOT contain the aborted record (id = 2)
+        let res = conn.execute("SELECT * FROM accounts;").unwrap();
+        assert_eq!(
+            res.len(),
+            1,
+            "Transaction rollback failed: partial insert detected!"
+        );
+        assert_eq!(res[0].values[0], Value::Int(1));
+        cleanup_files(&db_path, &wal_path);
+    }
+
+    #[test]
+    fn test_planner_semantic_failures() {
+        let (db_path, wal_path) = setup_db_test("semantics");
+        let db = Database::open(&db_path, &wal_path, 50).unwrap();
+        let mut conn = db.connect();
+
+        conn.execute("CREATE TABLE t1 (a INT, b BOOLEAN);")
+            .expect("CREATE TABLE failed");
+
+        let err_arity = conn.execute("INSERT INTO t1 VALUES (1, TRUE, 99);");
+        assert!(matches!(err_arity, Err(Error::SyntaxErr(_))));
+
+        let err_type = conn.execute("INSERT INTO t1 VALUES ('string', TRUE);");
+        assert!(matches!(err_type, Err(Error::SyntaxErr(_))));
+
+        // Invalid Column in UPDATE
+        let err_col = conn.execute("UPDATE t1 SET fake_col = 5 WHERE a = 1;");
+        assert!(matches!(err_col, Err(Error::ColumnNotFound(_))));
+
+        // 4. Type Mismatch in UPDATE
+        let err_type = conn.execute("UPDATE t1 SET b = 100 WHERE a = 1;");
+        assert!(matches!(err_type, Err(Error::SyntaxErr(_))));
         cleanup_files(&db_path, &wal_path);
     }
 }

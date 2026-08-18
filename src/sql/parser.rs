@@ -116,6 +116,12 @@ impl<'a> Parser<'a> {
                         self.parse_create_table()
                             .map(Statement::CreateTable)
                     }
+                    Token::Unique => {
+                        self.advance()?; // Consume 'UNIQUE'
+                        self.consume(&Token::Index)?;
+                        self.parse_create_unique_index()
+                            .map(Statement::CreateIndex)
+                    }
                     Token::Index => {
                         self.advance()?; // Consume 'INDEX'
                         self.parse_create_index()
@@ -764,6 +770,17 @@ impl<'a> Parser<'a> {
             column_name,
             unique: false,
         })
+    }
+
+    /// Parses create unique index query statement.
+    ///
+    /// ```sql
+    /// CREATE UNIQUE INDEX index_name ON table_name (col_name);
+    /// ```
+    fn parse_create_unique_index(&mut self) -> Result<CreateIndex, Error> {
+        let mut create_index = self.parse_create_index()?;
+        create_index.unique = true;
+        Ok(create_index)
     }
 }
 
