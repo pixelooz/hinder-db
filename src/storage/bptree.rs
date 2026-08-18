@@ -101,7 +101,7 @@ impl<'a> BpTree<'a> {
             match &*frame.read_arc() {
                 BTreeNode::Internal(node) => {
                     parents.push(curr_page_id);
-                    let next_page_id = node.route_key(row_id)?;
+                    let next_page_id = node.route_key(row_id);
                     curr_page_id = next_page_id;
                 }
                 _ => break,
@@ -140,7 +140,7 @@ impl<'a> BpTree<'a> {
             let frame = self.buffer_pool.fetch_page(curr_page_id)?;
             match &*frame.read() {
                 BTreeNode::Internal(node) => {
-                    curr_page_id = node.route_key(row_id)?;
+                    curr_page_id = node.route_key(row_id);
                 }
                 _ => break,
             }
@@ -304,7 +304,7 @@ impl<'a> BpTree<'a> {
         let BTreeNode::Internal(right_internal) = &mut *right_guard else {
             unreachable!("new_page(false) should never return a Leaf node");
         };
-        let new_promoted_key = left_internal.split(right_internal)?;
+        let new_promoted_key = left_internal.split(right_internal);
 
         // Insert the pending entry key into whichever sibling now owns its branch.
         if promoted_key < new_promoted_key {
@@ -426,7 +426,7 @@ impl<'a> BpTree<'a> {
             let node_guard = frame.read();
             match &*node_guard {
                 BTreeNode::Internal(node) => {
-                    let next_page_id = node.route_key(row_id)?;
+                    let next_page_id = node.route_key(row_id);
                     curr_page_id = next_page_id;
                 }
                 BTreeNode::Leaf(node) => return Ok(node.get_record(row_id)),
@@ -442,7 +442,7 @@ impl<'a> BpTree<'a> {
             let frame = self.buffer_pool.fetch_page(curr_page_id)?;
             let node_guard = frame.read();
             match &*node_guard {
-                BTreeNode::Internal(node) => curr_page_id = node.route_key(row_id)?,
+                BTreeNode::Internal(node) => curr_page_id = node.route_key(row_id),
                 _ => break,
             }
         }

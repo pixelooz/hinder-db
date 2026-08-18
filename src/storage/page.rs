@@ -278,8 +278,7 @@ impl InternalNode {
             self.rightmost_child_id
         } else {
             let entry_idx = self.slot_array[slot_idx] as usize;
-            let page_id = self.entries[entry_idx].child_page_id;
-            page_id
+            self.entries[entry_idx].child_page_id
         }
     }
 }
