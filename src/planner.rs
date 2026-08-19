@@ -134,7 +134,7 @@ impl<'a> Planner<'a> {
 
         if let Some(where_expr) = stmt.where_clause {
             let bound_predicate =
-                self.bind_expr(&where_expr, base_schema, Some(DataType::Boolean))?;
+                self.bind_expr(&where_expr, base_schema, Some(DataType::Boolean), None)?;
             pipeline = Box::new(FilterExecutor::new(pipeline, bound_predicate));
         }
         let is_star = matches!(
@@ -154,7 +154,8 @@ impl<'a> Planner<'a> {
 
         for (idx, derived_cols) in stmt.select_list.into_iter().enumerate() {
             let inferred_type = self.infer_expr_type(&derived_cols.expr, base_schema)?;
-            let bound_expr = self.bind_expr(&derived_cols.expr, base_schema, inferred_type)?;
+            let bound_expr =
+                self.bind_expr(&derived_cols.expr, base_schema, inferred_type, None)?;
 
             let col_name = derived_cols
                 .alias
@@ -214,21 +215,10 @@ impl<'a> Planner<'a> {
             // with nulls and won't error any of the encoders because of missing
             // data.
             let mut physical_row = vec![BoundExpr::Constant(Value::Null); schema.columns.len()];
-            for (idx, expr) in row_exprs.iter().enumerate() {
-                let physical_idx = target_columns[idx];
-                let expected_type = schema.columns[physical_idx].data_type;
-
-                if let Some(len_limit) = schema.columns[physical_idx].length
-                    && let Expr::Literal(AstLiteral::String(strs)) = expr
-                    && strs.len() > len_limit as usize
-                {
-                    return Err(Error::ConstraintViolation(format!(
-                        "VARCHAR(_) limit exceeded. limit={}, got={}",
-                        len_limit,
-                        strs.len()
-                    )));
-                }
-                let bound_expr = self.bind_expr(expr, schema, Some(expected_type))?;
+            for (&physical_idx, expr) in target_columns.iter().zip(row_exprs.iter()) {
+                let column = &schema.columns[physical_idx];
+                let bound_expr =
+                    self.bind_expr(expr, schema, Some(column.data_type), column.length)?;
                 physical_row[physical_idx] = bound_expr;
             }
             bound_values.push(physical_row);
@@ -258,7 +248,8 @@ impl<'a> Planner<'a> {
             Box::new(SeqScanExecutor::new(iterator, schema.clone()));
 
         if let Some(where_expr) = stmt.where_clause {
-            let bound_predicate = self.bind_expr(&where_expr, schema, Some(DataType::Boolean))?;
+            let bound_predicate =
+                self.bind_expr(&where_expr, schema, Some(DataType::Boolean), None)?;
             pipeline = Box::new(FilterExecutor::new(pipeline, bound_predicate));
         }
         let delete_executor = Box::new(DeleteExecutor::new(
@@ -285,7 +276,7 @@ impl<'a> Planner<'a> {
             Box::new(SeqScanExecutor::new(iterator, schema.clone()));
 
         if let Some(where_expr) = stmt.where_clause {
-            let bound_expr = self.bind_expr(&where_expr, schema, Some(DataType::Boolean))?;
+            let bound_expr = self.bind_expr(&where_expr, schema, Some(DataType::Boolean), None)?;
             pipeline = Box::new(FilterExecutor::new(pipeline, bound_expr));
         }
         let mut exec_assignments = Vec::with_capacity(stmt.assignments.len());
@@ -293,12 +284,17 @@ impl<'a> Planner<'a> {
         // Binds and type-checks the SET assignments.
         for ast_assign in stmt.assignments {
             let col_idx = schema.get_col_idx(&ast_assign.column_name)?;
-            let expected_type = Some(schema.columns[col_idx].data_type);
+            let column = &schema.columns[col_idx];
 
             // Binds the assigned value to the datatype of the column and errs
             // immediately if the data_types are different than expected.
             // `SET age = 'string'` will return a SyntaxError.
-            let bound_expr = self.bind_expr(&ast_assign.value, schema, expected_type)?;
+            let bound_expr = self.bind_expr(
+                &ast_assign.value,
+                schema,
+                Some(column.data_type),
+                column.length,
+            )?;
             exec_assignments.push(ExecAssignment {
                 col_idx,
                 expr: bound_expr,
@@ -327,6 +323,7 @@ impl<'a> Planner<'a> {
         expr: &Expr,
         schema: &Schema,
         expected_type: Option<DataType>,
+        max_length: Option<u32>,
     ) -> Result<BoundExpr, Error> {
         match expr {
             Expr::Column(col_ref) => {
@@ -335,7 +332,7 @@ impl<'a> Planner<'a> {
                 Ok(BoundExpr::ColumnRef { col_idx, data_type })
             }
             Expr::Literal(ast_lit) => {
-                let val = self.bind_literal(ast_lit, expected_type)?;
+                let val = self.bind_literal(ast_lit, expected_type, max_length)?;
                 Ok(BoundExpr::Constant(val))
             }
             Expr::BinaryOp { left, op, right } => {
@@ -347,8 +344,8 @@ impl<'a> Planner<'a> {
                 let type_for_left = right_type.or(expected_type);
                 let type_for_right = left_type.or(expected_type);
 
-                let bound_left = self.bind_expr(left, schema, type_for_left)?;
-                let bound_right = self.bind_expr(right, schema, type_for_right)?;
+                let bound_left = self.bind_expr(left, schema, type_for_left, max_length)?;
+                let bound_right = self.bind_expr(right, schema, type_for_right, max_length)?;
 
                 Ok(BoundExpr::BinaryOp {
                     left: Box::new(bound_left),
@@ -387,10 +384,22 @@ impl<'a> Planner<'a> {
         &self,
         ast_lit: &AstLiteral,
         expected_type: Option<DataType>,
+        max_length: Option<u32>,
     ) -> Result<Value, Error> {
         match ast_lit {
-            AstLiteral::String(val) => match expected_type {
-                Some(DataType::Varchar) | None => Ok(Value::Varchar(val.clone())),
+            AstLiteral::String(strs) => match expected_type {
+                Some(DataType::Varchar) | None => {
+                    if let Some(limit) = max_length
+                        && strs.chars().count() > limit as usize
+                    {
+                        return Err(Error::ConstraintViolation(format!(
+                            "VARCHAR limit exceeded: expected <= {}, got {}",
+                            limit,
+                            strs.chars().count()
+                        )));
+                    }
+                    Ok(Value::Varchar(strs.clone()))
+                }
                 Some(dt) => Err(Error::SyntaxErr(format!(
                     "type mismatch; cannot coerce string literal to {:?}",
                     dt
