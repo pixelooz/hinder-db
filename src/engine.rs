@@ -12,14 +12,24 @@ use parking_lot::{Mutex, RwLock};
 use crate::{
     catalog::manager::CatalogManager,
     error::Error,
-    execution::executor::ExecutionContext,
+    execution::ExecutionContext,
     planner::Planner,
-    relation::tuple::Tuple,
+    relation::{schema::Schema, tuple::Tuple},
     sql::{lexer::Lexer, parser::Parser},
     storage::{
         buffer_pool::BufferPool, flusher::BackgroundFlusher, page::DiskManager, wal::WalManager,
     },
 };
+
+/// The output payload returned to the user.
+#[derive(Debug)]
+pub enum ResultSet {
+    /// Returned by DQL operations(SELECT). Included column metadata and data rows.
+    Query { rows: Vec<Tuple>, schema: Schema },
+
+    /// Returned by DML/DDL operations(INSERT/UPDATE/DELETE/CREATE).
+    Mutation { rows_affected: usize },
+}
 
 /// The global instance of our database. It owns all the state of our database and
 /// provides thread-safe access to storage, metadata catalog and enables you to
@@ -72,21 +82,25 @@ pub struct Connection<'a> {
 
 impl<'a> Connection<'a> {
     /// Parses, plans, and executes a raw SQL string, returning a collection of Tuples.
-    pub fn execute(&mut self, query: &str) -> Result<Vec<Tuple>, Error> {
+    pub fn execute(&mut self, query: &str) -> Result<ResultSet, Error> {
         let lexer = Lexer::new(query);
 
         let mut parser = Parser::new(lexer)?;
         let stmt = parser.parse_statement()?;
 
-        let mut executor = {
+        let query_plan = {
             let catalog_guard = self.db.catalog.read();
             let planner = Planner::new(&catalog_guard);
             planner.plan_statement(stmt)?
         };
+        let mut executor = query_plan.executor;
+
         let txn_id = self.db.next_txn_id.fetch_add(1, Ordering::SeqCst);
         let mut ctx = ExecutionContext::new(&self.db.buffer_pool, &self.db.catalog, txn_id);
 
-        let mut results = Vec::new();
+        let mut rows = Vec::new();
+        let mut rows_affected = 0;
+
         loop {
             match executor.next(&mut ctx) {
                 Ok(None) => {
@@ -94,7 +108,10 @@ impl<'a> Connection<'a> {
                     self.db.buffer_pool.commit_transaction(txn_id)?;
                     break;
                 }
-                Ok(Some(tuple)) => results.push(tuple),
+                Ok(Some(tuple)) => {
+                    rows.push(tuple);
+                    rows_affected += 1;
+                }
                 Err(exec_err) => {
                     if let Err(abort_err) = self.db.buffer_pool.abort_transaction(txn_id) {
                         return Err(Error::Io(io::Error::other(format!(
@@ -106,7 +123,15 @@ impl<'a> Connection<'a> {
                 }
             }
         }
-        Ok(results)
+        let result_set = if query_plan.is_query {
+            ResultSet::Query {
+                rows,
+                schema: query_plan.schema,
+            }
+        } else {
+            ResultSet::Mutation { rows_affected }
+        };
+        Ok(result_set)
     }
 }
 
@@ -117,7 +142,11 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use crate::{engine::Database, error::Error, relation::types::Value};
+    use crate::{
+        engine::{Database, ResultSet},
+        error::Error,
+        relation::types::Value,
+    };
 
     static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -137,17 +166,33 @@ mod tests {
     }
 
     #[test]
-    fn test_create_table_demo() {
+    fn visualize_create_table_index_tuple() {
         let wal_path = format!("/Volumes/External T7/create_table.wal");
         let db_path = format!("/Volumes/External T7/create_table.db");
         cleanup_files(&db_path, &wal_path);
 
         let db = Database::open(&db_path, &wal_path, 100).unwrap();
         let mut conn = db.connect();
-        let tuples = conn
-            .execute("CREATE TABLE users (id INT, name VARCHAR(255))")
-            .unwrap();
-        dbg!(tuples);
+
+        let mut query = "CREATE TABLE users (id INT, name VARCHAR(100))";
+        let result_set = conn.execute(query).expect("CREATE TABLE failed");
+
+        dbg!(result_set);
+
+        query = "CREATE INDEX idx_name ON users(name)";
+        let result_set = conn.execute(query).expect("CREATE INDEX failed");
+
+        dbg!(result_set);
+
+        query = "INSERT INTO users VALUES (1, 'parth'), (2, 'juhi');";
+        let result_set = conn.execute(query).expect("INSERT INTO failed");
+
+        dbg!(result_set);
+
+        query = "SELECT id AS my_id, name AS not_my_name FROM users";
+        let result_set = conn.execute(query).expect("INSERT INTO failed");
+
+        dbg!(result_set);
 
         cleanup_files(&db_path, &wal_path);
     }
@@ -163,23 +208,42 @@ mod tests {
 
         let create_table_sql = "CREATE TABLE users (id INT, name VARCHAR(50), infinite_money BIGINT, is_broke BOOLEAN);";
 
-        let create_table_res = conn
+        let ResultSet::Mutation { rows_affected } = conn
             .execute(create_table_sql)
-            .expect("CREATE TABLE failed");
+            .expect("CREATE TABLE failed")
+        else {
+            panic!("Expected Mutation result")
+        };
 
-        assert!(create_table_res.is_empty(), "DDL should returns zero tuple");
+        assert_eq!(rows_affected, 0, "DDL should return zero rows affected");
 
         let create_index_sql = "CREATE INDEX idx_name ON users (name)";
 
-        let create_index_res = conn
+        let ResultSet::Mutation { rows_affected } = conn
             .execute(create_index_sql)
-            .expect("CREATE INDEX failed");
+            .expect("CREATE INDEX failed")
+        else {
+            panic!("Expected Mutation result")
+        };
 
-        assert!(create_index_res.is_empty(), "DDL should returns zero tuple");
+        assert_eq!(rows_affected, 0, "DDL should return zero rows affected");
 
         let insert_sql =
             "INSERT INTO users (id, name, is_broke) VALUES (1, 'Parth', true), (2, 'Juhi', false)";
-        let insert_res = conn.execute(insert_sql).expect("INSERT failed");
+        let ResultSet::Mutation { rows_affected } =
+            conn.execute(insert_sql).expect("INSERT failed")
+        else {
+            panic!("Expected Mutation result")
+        };
+        assert_eq!(rows_affected, 2);
+
+        // Fetch the inserted rows to verify NULL padding
+        let ResultSet::Query { rows: insert_res, .. } = conn
+            .execute("SELECT * FROM users WHERE id <= 2;")
+            .unwrap()
+        else {
+            panic!("Expected Query result")
+        };
 
         dbg!(&insert_res);
         assert_eq!(insert_res.len(), 2);
@@ -197,22 +261,41 @@ mod tests {
         let insert_sql =
             "INSERT INTO users VALUES (3, 'Parth2', 0, true), (4, 'Juhi2', 100, false)";
 
-        let insert_res = conn.execute(insert_sql).expect("INSERT failed");
-        dbg!(&insert_res);
-        assert_eq!(insert_res.len(), 2);
+        let ResultSet::Mutation { rows_affected } =
+            conn.execute(insert_sql).expect("INSERT failed")
+        else {
+            panic!("Expected Mutation result")
+        };
+        assert_eq!(rows_affected, 2);
 
-        assert_eq!(insert_res[0].values[0], Value::Int(3));
-        assert_eq!(insert_res[0].values[1], Value::Varchar("Parth2".into()));
-        assert_eq!(insert_res[0].values[2], Value::BigInt(0));
-        assert_eq!(insert_res[0].values[3], Value::Boolean(true));
+        // Fetch the newly inserted rows to verify direct insertion
+        let ResultSet::Query {
+            rows: insert_res2, ..
+        } = conn
+            .execute("SELECT * FROM users WHERE id > 2;")
+            .unwrap()
+        else {
+            panic!("Expected Query result")
+        };
+        dbg!(&insert_res2);
+        assert_eq!(insert_res2.len(), 2);
 
-        assert_eq!(insert_res[1].values[0], Value::Int(4));
-        assert_eq!(insert_res[1].values[1], Value::Varchar("Juhi2".into()));
-        assert_eq!(insert_res[1].values[2], Value::BigInt(100));
-        assert_eq!(insert_res[1].values[3], Value::Boolean(false));
+        assert_eq!(insert_res2[0].values[0], Value::Int(3));
+        assert_eq!(insert_res2[0].values[1], Value::Varchar("Parth2".into()));
+        assert_eq!(insert_res2[0].values[2], Value::BigInt(0));
+        assert_eq!(insert_res2[0].values[3], Value::Boolean(true));
+
+        assert_eq!(insert_res2[1].values[0], Value::Int(4));
+        assert_eq!(insert_res2[1].values[1], Value::Varchar("Juhi2".into()));
+        assert_eq!(insert_res2[1].values[2], Value::BigInt(100));
+        assert_eq!(insert_res2[1].values[3], Value::Boolean(false));
 
         let select_sql = "SELECT * FROM users WHERE id > 1;";
-        let select_res = conn.execute(select_sql).expect("SELECT failed");
+        let ResultSet::Query { rows: select_res, .. } =
+            conn.execute(select_sql).expect("SELECT failed")
+        else {
+            panic!("Expected Query result")
+        };
 
         dbg!(&select_res);
 
@@ -241,30 +324,45 @@ mod tests {
         conn.execute(query).unwrap();
 
         query = "SELECT * FROM users WHERE age = 30;";
-        let res = conn.execute(query).unwrap();
+        let ResultSet::Query { rows: res, .. } = conn.execute(query).unwrap() else {
+            panic!("Expected Query")
+        };
         assert_eq!(res.len(), 2, "Should find two users with age 30");
 
         // This forces the UpdateExecutor to remove 'Bob' from the '30' posting list
         // and add him to '35'
         query = "UPDATE users SET age = 35 WHERE name = 'Bob';";
-        conn.execute(query).unwrap();
+        let ResultSet::Mutation { rows_affected } = conn.execute(query).unwrap() else {
+            panic!("Expected Mutation")
+        };
+        assert_eq!(rows_affected, 1);
 
         query = "SELECT * FROM users WHERE age = 30;";
-        let res_30 = conn.execute(query).unwrap();
+        let ResultSet::Query { rows: res_30, .. } = conn.execute(query).unwrap() else {
+            panic!("Expected Query")
+        };
 
         assert_eq!(res_30.len(), 1, "Only Alice should remain at age 30");
         assert_eq!(res_30[0].values[1], Value::Varchar("Alice".into()));
 
         query = "SELECT * FROM users WHERE age = 35;";
-        let res_35 = conn.execute(query).unwrap();
+        let ResultSet::Query { rows: res_35, .. } = conn.execute(query).unwrap() else {
+            panic!("Expected Query")
+        };
 
         assert_eq!(res_35.len(), 1, "Bob should now be at age 35");
         assert_eq!(res_35[0].values[1], Value::Varchar("Bob".into()));
 
         query = "DELETE FROM users WHERE name = 'Charlie';";
-        conn.execute(query).unwrap();
+        let ResultSet::Mutation { rows_affected } = conn.execute(query).unwrap() else {
+            panic!("Expected Mutation")
+        };
+        assert_eq!(rows_affected, 1);
 
-        let res_all = conn.execute("SELECT * FROM users;").unwrap();
+        let ResultSet::Query { rows: res_all, .. } = conn.execute("SELECT * FROM users;").unwrap()
+        else {
+            panic!("Expected Query")
+        };
         assert_eq!(res_all.len(), 2, "Charlie should be deleted");
 
         cleanup_files(&db_path, &wal_path);
@@ -297,14 +395,19 @@ mod tests {
         } else {
             panic!("Expected ConstraintViolation error, got {:#?}", err_res);
         }
+
         // VERIFY ROLLBACK: The primary table should NOT contain the aborted record (id = 2)
-        let res = conn.execute("SELECT * FROM accounts;").unwrap();
+        let ResultSet::Query { rows: res, .. } = conn.execute("SELECT * FROM accounts;").unwrap()
+        else {
+            panic!("Expected Query")
+        };
         assert_eq!(
             res.len(),
             1,
             "Transaction rollback failed: partial insert detected!"
         );
         assert_eq!(res[0].values[0], Value::Int(1));
+
         cleanup_files(&db_path, &wal_path);
     }
 

@@ -2,9 +2,10 @@ use crate::{
     catalog::manager::CatalogManager,
     error::Error,
     execution::{
+        Executor,
         create::{CreateExecutor, CreateOperation},
         delete::DeleteExecutor,
-        executor::Executor,
+        emit::EmitExecutor,
         filter::FilterExecutor,
         insert::InsertExecutor,
         iterator::BpTreeIterator,
@@ -28,6 +29,18 @@ use crate::{
 
 pub(crate) mod bound_expr;
 
+/// Represents a completely planned execution tree and its metadata.
+pub struct QueryPlan {
+    /// The root node of the volcano execution pipeline.
+    pub executor: Box<dyn Executor>,
+
+    /// The schema of this pipeline/query.
+    pub schema: Schema,
+
+    /// Whether this query is DQL (SELECT) or not (INSERT/UPDATE/DELETE/CREATE).
+    pub is_query: bool,
+}
+
 /// The Query Transpiler. It is responsible for Semantic Analysis of the given Query
 /// ensuring its correctness and binding it to intermediate data.
 /// It validates Ast nodes against the Catalog, performs type checking, and constructs
@@ -43,7 +56,7 @@ impl<'a> Planner<'a> {
     }
 
     /// Converts a logical statement into a physical execution tree.
-    pub fn plan_statement(&self, stmt: Statement) -> Result<Box<dyn Executor>, Error> {
+    pub fn plan_statement(&self, stmt: Statement) -> Result<QueryPlan, Error> {
         use Statement::*;
         match stmt {
             CreateTable(stmt) => self.plan_create_table(stmt),
@@ -61,7 +74,7 @@ impl<'a> Planner<'a> {
 
     /// Translates the Ast `CreateTable` node into a logical `Schema` and routes it to
     /// the `CreateExecutor`
-    fn plan_create_table(&self, stmt: CreateTable) -> Result<Box<dyn Executor>, Error> {
+    fn plan_create_table(&self, stmt: CreateTable) -> Result<QueryPlan, Error> {
         let mut columns = Vec::with_capacity(stmt.columns.len());
         for col_def in stmt.columns {
             columns.push(Column::new(col_def.name, col_def.data_type, col_def.length));
@@ -72,22 +85,32 @@ impl<'a> Planner<'a> {
             table_name: stmt.table_name,
             schema,
         };
-        Ok(Box::new(CreateExecutor::new(operation)))
+        let query_plan = QueryPlan {
+            executor: Box::new(CreateExecutor::new(operation)),
+            schema: Schema::new(vec![]),
+            is_query: false,
+        };
+        Ok(query_plan)
     }
 
     /// Converts the `CreateIndex` Ast and passes it to the `CreateExecutor`.
-    fn plan_create_index(&self, stmt: CreateIndex) -> Result<Box<dyn Executor>, Error> {
+    fn plan_create_index(&self, stmt: CreateIndex) -> Result<QueryPlan, Error> {
         let operation = CreateOperation::Index {
             table_name: stmt.table_name,
             index_name: stmt.index_name,
             is_unique: stmt.unique,
             column_name: stmt.column_name,
         };
-        Ok(Box::new(CreateExecutor::new(operation)))
+        let query_plan = QueryPlan {
+            executor: Box::new(CreateExecutor::new(operation)),
+            schema: Schema::new(vec![]),
+            is_query: false,
+        };
+        Ok(query_plan)
     }
 
     /// Plans a SELECT query, building a pipeline of SeqScan -> Filter.
-    fn plan_select(&self, stmt: Select) -> Result<Box<dyn Executor>, Error> {
+    fn plan_select(&self, stmt: Select) -> Result<QueryPlan, Error> {
         let table_name = match stmt.from {
             Some(TableReference::BaseTable { name, .. }) => name,
             Some(TableReference::Join(_)) => {
@@ -103,23 +126,66 @@ impl<'a> Planner<'a> {
         };
         let root_page_id = self.catalog.get_table_root(&table_name)?;
 
-        let schema = self.catalog.get_table_schema(&table_name)?;
+        let base_schema = self.catalog.get_table_schema(&table_name)?;
         let iterator = BpTreeIterator::new(root_page_id);
 
         let mut pipeline: Box<dyn Executor> =
-            Box::new(SeqScanExecutor::new(iterator, schema.clone()));
+            Box::new(SeqScanExecutor::new(iterator, base_schema.clone()));
 
         if let Some(where_expr) = stmt.where_clause {
-            let bound_predicate = self.bind_expr(&where_expr, schema, Some(DataType::Boolean))?;
+            let bound_predicate =
+                self.bind_expr(&where_expr, base_schema, Some(DataType::Boolean))?;
             pipeline = Box::new(FilterExecutor::new(pipeline, bound_predicate));
         }
-        Ok(pipeline)
+        let is_star = matches!(
+            &stmt.select_list[0].expr,
+            Expr::Column(col_ref) if col_ref.column_name == "*"
+        );
+        if stmt.select_list.len() == 1 && is_star {
+            let query_plan = QueryPlan {
+                executor: pipeline,
+                schema: base_schema.clone(),
+                is_query: true,
+            };
+            return Ok(query_plan);
+        }
+        let mut emit_exprs = Vec::with_capacity(stmt.select_list.len());
+        let mut output_cols = Vec::with_capacity(stmt.select_list.len());
+
+        for (idx, derived_cols) in stmt.select_list.into_iter().enumerate() {
+            let inferred_type = self.infer_expr_type(&derived_cols.expr, base_schema)?;
+            let bound_expr = self.bind_expr(&derived_cols.expr, base_schema, inferred_type)?;
+
+            let col_name = derived_cols
+                .alias
+                .unwrap_or_else(|| match derived_cols.expr {
+                    Expr::Column(col_ref) => col_ref.column_name,
+                    _ => format!("col_{}", idx),
+                });
+            let data_type = inferred_type.unwrap_or(DataType::BigInt);
+
+            // This lets us use user provided aliases and we infer the datatype from the schema.
+            // For numbers, its not needed we differentiate between INT and BIGINT in the output
+            // schema if it can't be inferred from the schema so we just use BIGINT.
+            output_cols.push(Column::new(col_name, data_type, None));
+            emit_exprs.push(bound_expr);
+        }
+        // Build the project layer and the potentially aliased output schema.
+        pipeline = Box::new(EmitExecutor::new(pipeline, emit_exprs));
+        let output_schema = Schema::new(output_cols);
+
+        let query_plan = QueryPlan {
+            executor: pipeline,
+            schema: output_schema,
+            is_query: true,
+        };
+        Ok(query_plan)
     }
 
     /// Converts the logical Insert Ast node into a physical ValuesExec -> InsertExec
     /// pipeline. Confirms the validity of the statement and handles implicit NULL
     /// padding for intentionally omitted columns.
-    fn plan_insert(&self, stmt: Insert) -> Result<Box<dyn Executor>, Error> {
+    fn plan_insert(&self, stmt: Insert) -> Result<QueryPlan, Error> {
         let schema = self.catalog.get_table_schema(&stmt.table_name)?;
 
         // If the query omitted the column list (Ex: INSERT INTO users VALUE ...;).
@@ -160,16 +226,19 @@ impl<'a> Planner<'a> {
         let insert_executor = Box::new(InsertExecutor::new(
             values_executor,
             stmt.table_name,
-            /*  TODO: The executors only need to borrow the schema as far as I can see till now.
-            Remodel the ownership after the db is complete. */
             schema.clone(),
         ));
-        Ok(insert_executor)
+        let query_plan = QueryPlan {
+            executor: insert_executor,
+            schema: Schema::new(vec![]),
+            is_query: false,
+        };
+        Ok(query_plan)
     }
 
     /// Translates the Ast Delete node into a physical `SeqScan -> Filter -> Delete` pipeline.
     /// Binds the optional where predicate if present.
-    fn plan_delete(&self, stmt: Delete) -> Result<Box<dyn Executor>, Error> {
+    fn plan_delete(&self, stmt: Delete) -> Result<QueryPlan, Error> {
         let root_page_id = self.catalog.get_table_root(&stmt.table_name)?;
         let schema = self.catalog.get_table_schema(&stmt.table_name)?;
 
@@ -181,16 +250,22 @@ impl<'a> Planner<'a> {
             let bound_predicate = self.bind_expr(&where_expr, schema, Some(DataType::Boolean))?;
             pipeline = Box::new(FilterExecutor::new(pipeline, bound_predicate));
         }
-        Ok(Box::new(DeleteExecutor::new(
+        let delete_executor = Box::new(DeleteExecutor::new(
             pipeline,
             stmt.table_name,
             schema.clone(),
-        )))
+        ));
+        let query_plan = QueryPlan {
+            executor: delete_executor,
+            schema: Schema::new(vec![]),
+            is_query: false,
+        };
+        Ok(query_plan)
     }
 
     /// Translates the Ast Update node into a physical `SeqScan -> Filter -> Update` pipeline.
     /// Performs type checking on all the SET assignments against the schema.
-    fn plan_update(&self, stmt: Update) -> Result<Box<dyn Executor>, Error> {
+    fn plan_update(&self, stmt: Update) -> Result<QueryPlan, Error> {
         let root_page_id = self.catalog.get_table_root(&stmt.table_name)?;
         let schema = self.catalog.get_table_schema(&stmt.table_name)?;
 
@@ -218,12 +293,18 @@ impl<'a> Planner<'a> {
                 expr: bound_expr,
             });
         }
-        Ok(Box::new(UpdateExecutor::new(
+        let update_executor = Box::new(UpdateExecutor::new(
             pipeline,
             stmt.table_name,
             schema.clone(),
             exec_assignments,
-        )))
+        ));
+        let query_plan = QueryPlan {
+            executor: update_executor,
+            schema: Schema::new(vec![]),
+            is_query: false,
+        };
+        Ok(query_plan)
     }
 }
 
