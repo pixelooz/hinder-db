@@ -24,6 +24,10 @@ pub struct BpTreeIterator {
 
     /// Tracks the current physical slot index within the current leaf page.
     curr_slot_idx: usize,
+
+    /// If provided, the iterator will binary search to this key even for range
+    /// queries rather than starting from the leftmost leaf.
+    start_key: Option<u64>,
 }
 
 impl BpTreeIterator {
@@ -35,6 +39,19 @@ impl BpTreeIterator {
             curr_page_id: None,
             initialized: false,
             curr_slot_idx: 0,
+            start_key: None,
+        }
+    }
+
+    /// Initializes a new targeted scan iterator starting at the given `start_key`; calling
+    /// `next` will automatically fetch the starting key and start serving data.
+    pub fn new_at_key(root_page_id: PageId, start_key: u64) -> Self {
+        Self {
+            root_page_id,
+            curr_page_id: None,
+            initialized: false,
+            curr_slot_idx: 0,
+            start_key: Some(start_key),
         }
     }
 
@@ -49,9 +66,20 @@ impl BpTreeIterator {
         block_buffer: &mut Vec<u8>,
     ) -> Result<Option<u64>, Error> {
         if !self.initialized {
-            let leftmost_leaf = BpTree::get_leftmost_leaf(pool, self.root_page_id)?;
-            self.curr_page_id = Some(leftmost_leaf);
-            self.initialized = true;
+            match self.start_key {
+                Some(key) => {
+                    let (leaf_page_id, slot_idx) =
+                        BpTree::get_leaf_and_slot(pool, self.root_page_id, key)?;
+                    self.curr_page_id = Some(leaf_page_id);
+                    self.curr_slot_idx = slot_idx;
+                    self.initialized = true;
+                }
+                None => {
+                    let leftmost_leaf = BpTree::get_leftmost_leaf(pool, self.root_page_id)?;
+                    self.curr_page_id = Some(leftmost_leaf);
+                    self.initialized = true;
+                }
+            }
         }
         while let Some(curr_page_id) = self.curr_page_id {
             let frame = pool.fetch_page(curr_page_id)?;

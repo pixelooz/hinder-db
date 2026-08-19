@@ -84,6 +84,33 @@ impl<'a> BpTree<'a> {
         }
     }
 
+    /// Traverses down the internal nodes to locate the PageId and slot_idx for the given
+    /// key. Useful for O(log N) point look ups and range queries where the range maybe
+    /// towards the near end of the dataset.
+    pub fn get_leaf_and_slot(
+        pool: &BufferPool,
+        root_page_id: PageId,
+        key: u64,
+    ) -> Result<(PageId, usize), Error> {
+        let mut curr_page_id = root_page_id;
+        loop {
+            let frame = pool.fetch_page(curr_page_id)?;
+            let node_guard = frame.read();
+            match &*node_guard {
+                BTreeNode::Internal(node) => curr_page_id = node.route_key(key),
+                BTreeNode::Leaf(node) => {
+                    let slot_idx = node
+                        .slot_array
+                        .binary_search_by_key(&key, |&rec_idx| {
+                            node.records[rec_idx as usize].row_id
+                        })
+                        .unwrap_or_else(|x| x);
+                    return Ok((curr_page_id, slot_idx));
+                }
+            }
+        }
+    }
+
     /// Returns the active root PageId.
     pub fn get_root_id(&self) -> PageId {
         self.root_page_id
