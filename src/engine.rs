@@ -198,6 +198,47 @@ mod tests {
     }
 
     #[test]
+    fn test_fail_insert_varchar_limit_exceeded() {
+        let wal_path = format!("/Volumes/External T7/create_table.wal");
+        let db_path = format!("/Volumes/External T7/create_table.db");
+        cleanup_files(&db_path, &wal_path);
+
+        let db = Database::open(&db_path, &wal_path, 100).unwrap();
+        let mut conn = db.connect();
+
+        let mut query = "CREATE TABLE users (id INT, name VARCHAR(4))";
+        let result_set = conn.execute(query).expect("CREATE TABLE failed");
+
+        dbg!(result_set);
+
+        query = "CREATE INDEX idx_name ON users(name)";
+        let result_set = conn.execute(query).expect("CREATE INDEX failed");
+
+        dbg!(result_set);
+
+        query = "INSERT INTO users VALUES (1, 'parth'), (2, 'juhi');";
+        let result_set = conn.execute(query);
+        assert!(
+            result_set.is_err(),
+            "inserting longer VARCHAR should have errored"
+        );
+        assert!(
+            matches!(
+                result_set.as_ref().err(),
+                Some(Error::ConstraintViolation(_))
+            ),
+            "Wrong error type {:?}, should be Error::ConstraintViolation",
+            &result_set
+        );
+        query = "SELECT id AS my_id, name AS not_my_name FROM users";
+        let result_set = conn.execute(query).expect("SELECT failed");
+
+        dbg!(result_set);
+
+        cleanup_files(&db_path, &wal_path);
+    }
+
+    #[test]
     fn end_to_end_create_and_insert() {
         let wal_path = format!("/Volumes/External T7/create_and_insert.wal");
         let db_path = format!("/Volumes/External T7/create_and_insert.db");

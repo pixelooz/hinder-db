@@ -217,6 +217,17 @@ impl<'a> Planner<'a> {
             for (idx, expr) in row_exprs.iter().enumerate() {
                 let physical_idx = target_columns[idx];
                 let expected_type = schema.columns[physical_idx].data_type;
+
+                if let Some(len_limit) = schema.columns[physical_idx].length
+                    && let Expr::Literal(AstLiteral::String(strs)) = expr
+                    && strs.len() > len_limit as usize
+                {
+                    return Err(Error::ConstraintViolation(format!(
+                        "VARCHAR(_) limit exceeded. limit={}, got={}",
+                        len_limit,
+                        strs.len()
+                    )));
+                }
                 let bound_expr = self.bind_expr(expr, schema, Some(expected_type))?;
                 physical_row[physical_idx] = bound_expr;
             }
