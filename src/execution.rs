@@ -1,10 +1,12 @@
 pub(crate) mod create;
 pub(crate) mod delete;
+pub(crate) mod emit;
 pub(crate) mod evaluator;
 pub(crate) mod executor;
 pub(crate) mod filter;
 pub(crate) mod insert;
 pub(crate) mod iterator;
+pub(crate) mod project;
 pub(crate) mod seq_scan;
 pub(crate) mod update;
 pub(crate) mod value;
