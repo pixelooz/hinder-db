@@ -2,7 +2,7 @@ use std::io::Cursor;
 
 use crate::{
     error::Error,
-    execution::executor::{ExecutionContext, Executor, encode_secondary_key},
+    execution::{ExecutionContext, Executor, encode_secondary_key},
     relation::{schema::Schema, tuple::Tuple},
     storage::bptree::BpTree,
 };

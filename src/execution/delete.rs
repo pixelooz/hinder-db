@@ -1,6 +1,8 @@
 use crate::{
     error::Error,
-    execution::executor::{ExecutionContext, Executor, encode_secondary_key},
+    execution::{
+        encode_secondary_key, {ExecutionContext, Executor},
+    },
     relation::{schema::Schema, tuple::Tuple},
     storage::bptree::BpTree,
 };

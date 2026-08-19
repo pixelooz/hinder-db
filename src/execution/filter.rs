@@ -2,7 +2,7 @@ use crate::{
     error::Error,
     execution::{
         evaluator::Evaluator,
-        executor::{ExecutionContext, Executor},
+        {ExecutionContext, Executor},
     },
     planner::bound_expr::BoundExpr,
     relation::{tuple::Tuple, types::Value},

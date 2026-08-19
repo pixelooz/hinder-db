@@ -1,6 +1,6 @@
 use crate::{
     error::Error,
-    execution::executor::{ExecutionContext, Executor},
+    execution::{ExecutionContext, Executor},
     relation::{schema::Schema, tuple::Tuple},
 };
 
@@ -46,12 +46,9 @@ impl Executor for CreateExecutor {
 
         match &self.operation {
             CreateOperation::Table { table_name, schema } => {
-                catalog_guard.create_table(
-                    ctx.buffer_pool,
-                    table_name.clone(),
-                    schema.clone(),
-                    ctx.txn_id,
-                )?;
+                let table_name = table_name.clone();
+                let schema = schema.clone();
+                catalog_guard.create_table(ctx.buffer_pool, table_name, schema, ctx.txn_id)?;
             }
             CreateOperation::Index {
                 table_name,
@@ -59,12 +56,15 @@ impl Executor for CreateExecutor {
                 is_unique,
                 column_name,
             } => {
+                let index_name = index_name.clone();
+                let table_name = table_name.clone();
+                let col_name = column_name.clone();
                 catalog_guard.create_index(
                     ctx.buffer_pool,
-                    index_name.clone(),
-                    table_name.clone(),
+                    index_name,
+                    table_name,
                     *is_unique,
-                    column_name.clone(),
+                    col_name,
                     ctx.txn_id,
                 )?;
             }

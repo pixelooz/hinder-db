@@ -4,7 +4,7 @@ use crate::{
     error::Error,
     execution::{
         evaluator::Evaluator,
-        executor::{ExecutionContext, Executor, encode_secondary_key},
+        {ExecutionContext, Executor, encode_secondary_key},
     },
     planner::bound_expr::BoundExpr,
     relation::{schema::Schema, tuple::Tuple},

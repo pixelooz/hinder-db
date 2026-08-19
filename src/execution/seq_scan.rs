@@ -3,8 +3,8 @@ use std::io::Cursor;
 use crate::{
     error::Error,
     execution::{
-        executor::{ExecutionContext, Executor},
         iterator::BpTreeIterator,
+        {ExecutionContext, Executor},
     },
     relation::{schema::Schema, tuple::Tuple},
 };
