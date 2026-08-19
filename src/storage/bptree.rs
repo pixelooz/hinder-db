@@ -282,7 +282,7 @@ impl<'a> BpTree<'a> {
                 // so we attempt to remove them.
                 parent_node.compact();
                 if parent_node
-                    .insert_entry(promoted_key, child_page_id.clone())
+                    .insert_entry(promoted_key, child_page_id)
                     .is_ok()
                 {
                     parent_node.mark_dirty();
