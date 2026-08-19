@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
 mod catalog;
+mod engine;
 mod error;
 mod execution;
-mod pellet;
 mod planner;
 mod relation;
 mod sql;

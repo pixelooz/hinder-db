@@ -117,7 +117,7 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use crate::{error::Error, pellet::Database, relation::types::Value};
+    use crate::{engine::Database, error::Error, relation::types::Value};
 
     static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
