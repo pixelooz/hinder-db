@@ -82,7 +82,7 @@ pub struct Connection<'a> {
 
 impl<'a> Connection<'a> {
     /// Parses, plans, and executes a raw SQL string, returning a collection of Tuples.
-    pub fn execute(&mut self, query: &str) -> Result<ResultSet, Error> {
+    pub fn execute(&self, query: &str) -> Result<ResultSet, Error> {
         let lexer = Lexer::new(query);
 
         let mut parser = Parser::new(lexer)?;
@@ -140,6 +140,7 @@ mod tests {
     use std::{
         fs,
         sync::atomic::{AtomicUsize, Ordering},
+        time::Instant,
     };
 
     use crate::{
@@ -172,7 +173,7 @@ mod tests {
         cleanup_files(&db_path, &wal_path);
 
         let db = Database::open(&db_path, &wal_path, 100).unwrap();
-        let mut conn = db.connect();
+        let conn = db.connect();
 
         let mut query = "CREATE TABLE users (id INT, name VARCHAR(100))";
         let result_set = conn.execute(query).expect("CREATE TABLE failed");
@@ -204,7 +205,7 @@ mod tests {
         cleanup_files(&db_path, &wal_path);
 
         let db = Database::open(&db_path, &wal_path, 100).unwrap();
-        let mut conn = db.connect();
+        let conn = db.connect();
 
         let mut query = "CREATE TABLE users (id INT, name VARCHAR(4))";
         let result_set = conn.execute(query).expect("CREATE TABLE failed");
@@ -245,7 +246,7 @@ mod tests {
         cleanup_files(&db_path, &wal_path);
 
         let db = Database::open(&db_path, &wal_path, 100).expect("Failed to boot database");
-        let mut conn = db.connect();
+        let conn = db.connect();
 
         let create_table_sql = "CREATE TABLE users (id INT, name VARCHAR(50), infinite_money BIGINT, is_broke BOOLEAN);";
 
@@ -355,7 +356,7 @@ mod tests {
         let (db_path, wal_path) = setup_db_test("crud");
 
         let db = Database::open(&db_path, &wal_path, 20).unwrap();
-        let mut conn = db.connect();
+        let conn = db.connect();
 
         let mut query = "CREATE TABLE users (id INT, name VARCHAR(255), age INT);";
         conn.execute(query).unwrap();
@@ -415,7 +416,7 @@ mod tests {
     fn test_unique_constraint_and_runtime_rollback() {
         let (db_path, wal_path) = setup_db_test("rollback");
         let db = Database::open(&db_path, &wal_path, 50).unwrap();
-        let mut conn = db.connect();
+        let conn = db.connect();
 
         conn.execute("CREATE TABLE accounts (id INT, email VARCHAR(255));")
             .expect("CREATE TABLE accounts failed");
@@ -458,7 +459,7 @@ mod tests {
     fn test_planner_semantic_failures() {
         let (db_path, wal_path) = setup_db_test("semantics");
         let db = Database::open(&db_path, &wal_path, 50).unwrap();
-        let mut conn = db.connect();
+        let conn = db.connect();
 
         conn.execute("CREATE TABLE t1 (a INT, b BOOLEAN);")
             .expect("CREATE TABLE failed");
@@ -484,15 +485,15 @@ mod tests {
         let (db_path, wal_path) = setup_db_test("index_scan_ops");
 
         let db = Database::open(&db_path, &wal_path, 20).unwrap();
-        let mut conn = db.connect();
+        let conn = db.connect();
 
-        // 1. Setup Table and Index
+        // Setup Table and Index
         conn.execute("CREATE TABLE employees (id INT, name VARCHAR(255), salary INT);")
             .unwrap();
         conn.execute("CREATE INDEX idx_salary ON employees(salary);")
             .unwrap();
 
-        // 2. Insert Data
+        // Insert Data
         // Salaries are 50, 60, 70, 80, 90
         let insert_query = "INSERT INTO employees VALUES
                 (1, 'Alice', 50),
@@ -503,47 +504,41 @@ mod tests {
         conn.execute(insert_query).unwrap();
 
         // Helper closure to extract rows and keep the test clean
-        let mut run_query = |sql: &str| {
+        let run_query = |sql: &str| {
             let ResultSet::Query { rows, .. } = conn.execute(sql).unwrap() else {
                 panic!("Expected Query ResultSet for SQL: {}", sql)
             };
             rows
         };
 
-        // --- TEST 1: Exact Match (Eq) ---
         let res_eq = run_query("SELECT * FROM employees WHERE salary = 70;");
         assert_eq!(res_eq.len(), 1, "Eq should find exactly 1 record");
         assert_eq!(res_eq[0].values[1], Value::Varchar("Charlie".into()));
 
-        // --- TEST 2: Greater Than (Gt) ---
         // Should skip 70, and return 80 and 90
         let res_gt = run_query("SELECT * FROM employees WHERE salary > 70;");
         assert_eq!(res_gt.len(), 2, "Gt should find 2 records");
         assert_eq!(res_gt[0].values[1], Value::Varchar("Diana".into()));
         assert_eq!(res_gt[1].values[1], Value::Varchar("Eve".into()));
 
-        // --- TEST 3: Greater Than or Equal (Gte) ---
         // Should include 70, 80, and 90
         let res_gte = run_query("SELECT * FROM employees WHERE 70 <= salary;");
         assert_eq!(res_gte.len(), 3, "Gte should find 3 records");
         assert_eq!(res_gte[0].values[1], Value::Varchar("Charlie".into()));
         assert_eq!(res_gte[2].values[1], Value::Varchar("Eve".into()));
 
-        // --- TEST 4: Less Than (Lt) ---
         // Should start from the beginning and stop BEFORE 70 (returns 50, 60)
         let res_lt = run_query("SELECT * FROM employees WHERE salary < 70;");
         assert_eq!(res_lt.len(), 2, "Lt should find 2 records");
         assert_eq!(res_lt[0].values[1], Value::Varchar("Alice".into()));
         assert_eq!(res_lt[1].values[1], Value::Varchar("Bob".into()));
 
-        // --- TEST 5: Less Than or Equal (Lte) ---
         // Should start from the beginning and stop AFTER 70 (returns 50, 60, 70)
         let res_lte = run_query("SELECT * FROM employees WHERE salary <= 70;");
         assert_eq!(res_lte.len(), 3, "Lte should find 3 records");
         assert_eq!(res_lte[0].values[1], Value::Varchar("Alice".into()));
         assert_eq!(res_lte[2].values[1], Value::Varchar("Charlie".into()));
 
-        // --- TEST 6: Empty Result Guard ---
         // Ensures Point Lookup safely returns 0 rows if key doesn't exist
         let res_empty = run_query("SELECT * FROM employees WHERE salary = 999;");
         assert_eq!(
@@ -552,7 +547,6 @@ mod tests {
             "Eq on non-existent key should return 0 rows"
         );
 
-        // --- TEST 7: Range Scan Miss (Gte) ---
         // Ensures Range Scan safely handles falling off the end of the B-Tree
         let res_out_of_bounds = run_query("SELECT * FROM employees WHERE salary >= 999;");
         assert_eq!(
@@ -560,6 +554,66 @@ mod tests {
             0,
             "Gte out of bounds should return 0 rows"
         );
+        cleanup_files(&db_path, &wal_path);
+    }
+
+    #[test]
+    fn benchmark_seq_vs_index_scan() {
+        let (db_path, wal_path) = setup_db_test("benchmark_scan");
+
+        // Boot with a highly constrained buffer pool (50 pages = 400 KB)
+        let db = Database::open(&db_path, &wal_path, 50).unwrap();
+        let conn = db.connect();
+
+        conn.execute("CREATE TABLE metrics (id INT, value INT);")
+            .unwrap();
+
+        // Create the index BEFORE inserting so it gets populated
+        conn.execute("CREATE INDEX idx_value ON metrics(value);")
+            .unwrap();
+
+        println!("Inserting 50,000 rows (this may take a few seconds)...");
+        for batch in 0..500 {
+            let mut query = String::from("INSERT INTO metrics VALUES ");
+            for i in 0..100 {
+                let val = batch * 100 + i;
+                query.push_str(&format!("({}, {}),", val, val));
+            }
+            query.pop();
+            query.push(';');
+            conn.execute(&query).unwrap();
+        }
+
+        let run_query = |sql: &str| {
+            let ResultSet::Query { rows, .. } = conn.execute(sql).unwrap() else {
+                panic!("Expected Query ResultSet")
+            };
+            rows
+        };
+
+        println!("Running Sequential Scan...");
+        // Query the UN-INDEXED column `id`
+        let start_seq = Instant::now();
+        let res_seq = run_query("SELECT * FROM metrics WHERE id = 49999;");
+        let seq_duration = start_seq.elapsed();
+
+        assert_eq!(res_seq.len(), 1);
+
+        println!("Running Index Scan...");
+        // Query the INDEXED column `value`
+        let start_idx = Instant::now();
+        let res_idx = run_query("SELECT * FROM metrics WHERE value = 49999;");
+        let idx_duration = start_idx.elapsed();
+
+        assert_eq!(res_idx.len(), 1);
+
+        println!("========================================");
+        println!("Sequential Scan Time : {:?}", seq_duration);
+        println!("Index Scan Time      : {:?}", idx_duration);
+
+        let speedup = seq_duration.as_secs_f64() / idx_duration.as_secs_f64();
+        println!("Speedup Factor       : {:.2}x Faster", speedup);
+        println!("========================================");
 
         cleanup_files(&db_path, &wal_path);
     }

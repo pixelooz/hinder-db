@@ -143,11 +143,11 @@ impl<'a> Planner<'a> {
                     {
                         // Flip the operator. (20 <= age) -> (age >= 20)
                         let opp_op = match op {
-                            Eq => Neq,
-                            Neq => Eq,
+                            Eq => Eq,
+                            Neq => Neq,
                             Gt => Lt,
-                            Lt => Gt,
                             Gte => Lte,
+                            Lt => Gt,
                             Lte => Gte,
                             _ => unreachable!(),
                         };
