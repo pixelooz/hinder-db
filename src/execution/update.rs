@@ -4,7 +4,7 @@ use crate::{
     error::Error,
     execution::{
         evaluator::Evaluator,
-        {ExecutionContext, Executor, encode_secondary_key},
+        {ExecutionContext, Executor},
     },
     planner::bound_expr::BoundExpr,
     relation::{schema::Schema, tuple::Tuple},
@@ -85,7 +85,7 @@ impl Executor for UpdateExecutor {
                 continue;
             }
             let sec_tree = BpTree::new(ctx.buffer_pool, index_meta.root_page_id);
-            let old_sec_key = encode_secondary_key(old_val);
+            let old_sec_key = old_val.to_index_key();
 
             // remove this row_id from the old key's row list.
             if let Some(existing_row_ids) = sec_tree.find_record(old_sec_key)? {
@@ -106,7 +106,7 @@ impl Executor for UpdateExecutor {
                     sec_tree.update(old_sec_key, new_row_ids, ctx.txn_id)?;
                 }
             }
-            let new_sec_key = encode_secondary_key(new_val);
+            let new_sec_key = new_val.to_index_key();
             let enc_vec_row = row_id.to_le_bytes();
 
             // Append row_id to the new key's row list.

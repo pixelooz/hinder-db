@@ -1,6 +1,8 @@
 use std::{
     cmp::Ordering,
+    collections::hash_map,
     fmt::{self, Display},
+    hash::{Hash, Hasher},
 };
 
 use crate::error::Error;
@@ -120,6 +122,30 @@ impl Value {
             Some(*val)
         } else {
             None
+        }
+    }
+
+    /// Computes 64 bit BTree routing key from any supported value type. Uses xor based
+    /// order-preserving conversion for numbers hashes for strings.
+    pub fn to_index_key(&self) -> u64 {
+        match self {
+            // Flip the highest bit to preserve sorting order when converting from
+            // signed to unsigned.
+            Value::BigInt(val) => (*val as u64) ^ (1 << 63),
+            Value::Int(val) => ((*val as i64) as u64) ^ (1 << 63),
+            Value::Null => 0,
+            Value::Boolean(val) => {
+                if *val {
+                    1
+                } else {
+                    0
+                }
+            }
+            Value::Varchar(val) => {
+                let mut hasher = hash_map::DefaultHasher::new();
+                val.hash(&mut hasher);
+                hasher.finish()
+            }
         }
     }
 }

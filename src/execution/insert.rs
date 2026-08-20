@@ -2,7 +2,7 @@ use std::io::Cursor;
 
 use crate::{
     error::Error,
-    execution::{ExecutionContext, Executor, encode_secondary_key},
+    execution::{ExecutionContext, Executor},
     relation::{schema::Schema, tuple::Tuple},
     storage::bptree::BpTree,
 };
@@ -64,9 +64,8 @@ impl Executor for InsertExecutor {
         };
         for (_, index_meta) in indexes {
             let col_idx = self.schema.get_col_idx(&index_meta.column_name)?;
-            let col_val = &tuple.values[col_idx];
+            let sec_key = tuple.values[col_idx].to_index_key();
 
-            let sec_key = encode_secondary_key(col_val);
             let sec_tree = BpTree::new(ctx.buffer_pool, index_meta.root_page_id);
 
             // The payload for a secondary index is an array or primary row ids.

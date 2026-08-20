@@ -3,23 +3,17 @@ pub(crate) mod delete;
 pub(crate) mod emit;
 pub(crate) mod evaluator;
 pub(crate) mod filter;
+pub(crate) mod index;
 pub(crate) mod insert;
 pub(crate) mod iterator;
 pub(crate) mod seq_scan;
 pub(crate) mod update;
 pub(crate) mod value;
 
-use std::{
-    collections::hash_map,
-    hash::{Hash, Hasher},
-};
-
 use parking_lot::RwLock;
 
 use crate::{
-    catalog::manager::CatalogManager,
-    error::Error,
-    relation::{tuple::Tuple, types::Value},
+    catalog::manager::CatalogManager, error::Error, relation::tuple::Tuple,
     storage::buffer_pool::BufferPool,
 };
 
@@ -65,28 +59,4 @@ pub trait Executor {
     /// Returns Ok(None) if the scan was exhausted. An Err is only returned if
     /// the method encounters any I/O error.
     fn next(&mut self, ctx: &mut ExecutionContext) -> Result<Option<Tuple>, Error>;
-}
-
-/// Computes 64 bit BTree routing key from any supported value type. Uses xor based
-/// order-preserving conversion for numbers hashes for strings.
-pub fn encode_secondary_key(value: &Value) -> u64 {
-    match value {
-        // Flip the highest bit to preserve sorting order when converting from
-        // signed to unsigned.
-        Value::BigInt(val) => (*val as u64) ^ (1 << 63),
-        Value::Int(val) => ((*val as i64) as u64) ^ (1 << 63),
-        Value::Null => 0,
-        Value::Boolean(val) => {
-            if *val {
-                1
-            } else {
-                0
-            }
-        }
-        Value::Varchar(val) => {
-            let mut hasher = hash_map::DefaultHasher::new();
-            val.hash(&mut hasher);
-            hasher.finish()
-        }
-    }
 }

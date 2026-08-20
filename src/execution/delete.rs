@@ -1,8 +1,6 @@
 use crate::{
     error::Error,
-    execution::{
-        encode_secondary_key, {ExecutionContext, Executor},
-    },
+    execution::{ExecutionContext, Executor},
     relation::{schema::Schema, tuple::Tuple},
     storage::bptree::BpTree,
 };
@@ -51,9 +49,8 @@ impl Executor for DeleteExecutor {
         };
         for (_, index_meta) in indexes {
             let col_idx = self.schema.get_col_idx(&index_meta.column_name)?;
-            let col_val = &tuple.values[col_idx];
+            let sec_key = tuple.values[col_idx].to_index_key();
 
-            let sec_key = encode_secondary_key(col_val);
             let sec_tree = BpTree::new(ctx.buffer_pool, index_meta.root_page_id);
 
             if let Some(existing_row_ids) = sec_tree.find_record(sec_key)? {
