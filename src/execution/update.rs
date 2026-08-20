@@ -81,7 +81,7 @@ impl Executor for UpdateExecutor {
             let old_val = &old_tuple.values[col_idx];
             let new_val = &new_tuple.values[col_idx];
 
-            if old_val != new_val {
+            if old_val == new_val {
                 continue;
             }
             let sec_tree = BpTree::new(ctx.buffer_pool, index_meta.root_page_id);

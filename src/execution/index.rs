@@ -4,6 +4,7 @@ use crate::{
     error::Error,
     execution::{ExecutionContext, Executor, iterator::BpTreeIterator},
     relation::{schema::Schema, tuple::Tuple},
+    sql::ast::BinaryOperator,
     storage::{bptree::BpTree, page::PageId},
 };
 
@@ -21,6 +22,7 @@ pub struct IndexScanExecutor {
     iterator: BpTreeIterator,
     scan_type: IndexType,
     search_key: u64,
+    op: BinaryOperator,
     schema: Schema,
     /// A queue of primary keys, extracted from a secondary index's tuple.
     primary_row_ids: IntoIter<u64>,
@@ -32,12 +34,14 @@ impl IndexScanExecutor {
         iterator: BpTreeIterator,
         scan_type: IndexType,
         search_key: u64,
+        op: BinaryOperator,
         schema: Schema,
     ) -> Self {
         Self {
             iterator,
             scan_type,
             search_key,
+            op,
             schema,
             primary_row_ids: Vec::new().into_iter(),
         }
@@ -72,10 +76,35 @@ impl Executor for IndexScanExecutor {
             else {
                 return Ok(None);
             };
-            // There are no more records for the search_key as the key returned has
-            // changed.
-            if index_key != self.search_key {
-                return Ok(None);
+            // Boundary checks
+            match self.op {
+                BinaryOperator::Eq => {
+                    // There are no more records for the search_key as the key returned has
+                    // changed.
+                    if index_key != self.search_key {
+                        return Ok(None);
+                    }
+                }
+                // No upper bound to check; keep scanning until EOF.
+                BinaryOperator::Gt => {
+                    // If we landed exactly on the target, skip it. (x > 30 should skip 30)
+                    if index_key == self.search_key {
+                        continue;
+                    }
+                }
+                BinaryOperator::Gte => {}
+                // Stop the scan the moment we hit or exceed the target
+                BinaryOperator::Lt => {
+                    if index_key >= self.search_key {
+                        return Ok(None);
+                    }
+                }
+                BinaryOperator::Lte => {
+                    if index_key > self.search_key {
+                        return Ok(None);
+                    }
+                }
+                _ => unreachable!("Invalid index operator"),
             }
             match &self.scan_type {
                 IndexType::Primary => {

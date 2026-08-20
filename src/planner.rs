@@ -118,33 +118,56 @@ impl<'a> Planner<'a> {
         bound_expr: &BoundExpr,
         schema: &Schema,
         indexes: &'b HashMap<String, IndexMeta>,
-    ) -> Option<(&'b IndexMeta, Value)> {
+    ) -> Option<(&'b IndexMeta, BinaryOperator, Value)> {
         use BinaryOperator::*;
         use BoundExpr::*;
 
         match bound_expr {
-            BinaryOp { left, op: Eq, right } => {
-                if let ColumnRef { col_idx, .. } = **left
-                    && let Constant(val) = &**right
-                {
-                    let col_name = &schema.columns[col_idx].name;
-                    if let Some(meta) = indexes.get(col_name) {
-                        return Some((meta, val.clone()));
+            BinaryOp { left, op, right } => {
+                if matches!(op, Eq | Gt | Gte | Lt | Lte) {
+                    // Case 1: [Column Op Constant] (WHERE age >= 20)
+                    if let ColumnRef { col_idx, .. } = **left
+                        && let Constant(val) = &**right
+                    {
+                        let col_name = &schema.columns[col_idx].name;
+                        if let Some(meta) = indexes
+                            .values()
+                            .find(|im| im.column_name == *col_name)
+                        {
+                            return Some((meta, *op, val.clone()));
+                        }
+                    }
+                    // Case 2: [Constant Op Column] (WHERE 20 <= age)
+                    if let ColumnRef { col_idx, .. } = **right
+                        && let Constant(val) = &**left
+                    {
+                        // Flip the operator. (20 <= age) -> (age >= 20)
+                        let opp_op = match op {
+                            Eq => Neq,
+                            Neq => Eq,
+                            Gt => Lt,
+                            Lt => Gt,
+                            Gte => Lte,
+                            Lte => Gte,
+                            _ => unreachable!(),
+                        };
+                        let col_name = &schema.columns[col_idx].name;
+                        if let Some(meta) = indexes
+                            .values()
+                            .find(|im| im.column_name == *col_name)
+                        {
+                            return Some((meta, opp_op, val.clone()));
+                        }
                     }
                 }
-                if let ColumnRef { col_idx, .. } = **right
-                    && let Constant(val) = &**left
-                {
-                    let col_name = &schema.columns[col_idx].name;
-                    if let Some(meta) = indexes.get(col_name) {
-                        return Some((meta, val.clone()));
-                    }
+                // If it wasn't a valid condition, checking if its an And condition
+                if *op == And {
+                    return self
+                        .find_indexable_condition(left, schema, indexes)
+                        .or_else(|| self.find_indexable_condition(right, schema, indexes));
                 }
                 None
             }
-            BinaryOp { left, op: And, right } => self
-                .find_indexable_condition(left, schema, indexes)
-                .or_else(|| self.find_indexable_condition(right, schema, indexes)),
             _ => None,
         }
     }
@@ -165,21 +188,29 @@ impl<'a> Planner<'a> {
         // Look for an exact match predicate on an indexed column.
         if let Some(predicate) = bound_predicate
             && let Some(indexes) = self.catalog.get_table_indexes(table_name)
-            && let Some((index_meta, value)) =
+            && let Some((index_meta, op, value)) =
                 self.find_indexable_condition(predicate, schema, indexes)
         {
             let search_key = value.to_index_key();
+            let start_key = match op {
+                BinaryOperator::Eq | BinaryOperator::Gt | BinaryOperator::Gte => Some(search_key),
+                BinaryOperator::Lt | BinaryOperator::Lte => None, // Start at the leftmost leaf.
+                _ => unreachable!("OR and AND should not have been encountered."),
+            };
             let scan_type = IndexType::Secondary { primary_root_id };
-            let iterator = BpTreeIterator::new_at_key(index_meta.root_page_id, search_key);
+            let iterator = BpTreeIterator::new_at_key(index_meta.root_page_id, start_key);
             let index_executor = Box::new(IndexScanExecutor::new(
                 iterator,
                 scan_type,
                 search_key,
+                op,
                 schema.clone(),
             ));
+            eprintln!("built an index type on {}", search_key);
             return Ok(index_executor);
         }
         let iterator = BpTreeIterator::new(primary_root_id);
+        eprintln!("built a sequential type");
         Ok(Box::new(SeqScanExecutor::new(iterator, schema.clone())))
     }
 

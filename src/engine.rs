@@ -255,18 +255,24 @@ mod tests {
         else {
             panic!("Expected Mutation result")
         };
-
         assert_eq!(rows_affected, 0, "DDL should return zero rows affected");
 
-        let create_index_sql = "CREATE INDEX idx_name ON users (name)";
-
+        let create_index_name = "CREATE INDEX idx_name ON users (name)";
         let ResultSet::Mutation { rows_affected } = conn
-            .execute(create_index_sql)
+            .execute(create_index_name)
             .expect("CREATE INDEX failed")
         else {
             panic!("Expected Mutation result")
         };
+        assert_eq!(rows_affected, 0, "DDL should return zero rows affected");
 
+        let create_index_id = "CREATE INDEX idx_id ON users (id)";
+        let ResultSet::Mutation { rows_affected } = conn
+            .execute(create_index_id)
+            .expect("CREATE INDEX failed")
+        else {
+            panic!("Expected Mutation result")
+        };
         assert_eq!(rows_affected, 0, "DDL should return zero rows affected");
 
         let insert_sql =
@@ -286,7 +292,6 @@ mod tests {
             panic!("Expected Query result")
         };
 
-        dbg!(&insert_res);
         assert_eq!(insert_res.len(), 2);
 
         assert_eq!(insert_res[0].values[0], Value::Int(1));
@@ -318,7 +323,6 @@ mod tests {
         else {
             panic!("Expected Query result")
         };
-        dbg!(&insert_res2);
         assert_eq!(insert_res2.len(), 2);
 
         assert_eq!(insert_res2[0].values[0], Value::Int(3));
@@ -337,8 +341,6 @@ mod tests {
         else {
             panic!("Expected Query result")
         };
-
-        dbg!(&select_res);
 
         assert_eq!(select_res.len(), 3);
         assert_eq!(select_res[0].values[1], Value::Varchar("Juhi".into()));
@@ -474,6 +476,91 @@ mod tests {
         // 4. Type Mismatch in UPDATE
         let err_type = conn.execute("UPDATE t1 SET b = 100 WHERE a = 1;");
         assert!(matches!(err_type, Err(Error::SyntaxErr(_))));
+        cleanup_files(&db_path, &wal_path);
+    }
+
+    #[test]
+    fn test_index_scan_all_operators() {
+        let (db_path, wal_path) = setup_db_test("index_scan_ops");
+
+        let db = Database::open(&db_path, &wal_path, 20).unwrap();
+        let mut conn = db.connect();
+
+        // 1. Setup Table and Index
+        conn.execute("CREATE TABLE employees (id INT, name VARCHAR(255), salary INT);")
+            .unwrap();
+        conn.execute("CREATE INDEX idx_salary ON employees(salary);")
+            .unwrap();
+
+        // 2. Insert Data
+        // Salaries are 50, 60, 70, 80, 90
+        let insert_query = "INSERT INTO employees VALUES
+                (1, 'Alice', 50),
+                (2, 'Bob', 60),
+                (3, 'Charlie', 70),
+                (4, 'Diana', 80),
+                (5, 'Eve', 90);";
+        conn.execute(insert_query).unwrap();
+
+        // Helper closure to extract rows and keep the test clean
+        let mut run_query = |sql: &str| {
+            let ResultSet::Query { rows, .. } = conn.execute(sql).unwrap() else {
+                panic!("Expected Query ResultSet for SQL: {}", sql)
+            };
+            rows
+        };
+
+        // --- TEST 1: Exact Match (Eq) ---
+        let res_eq = run_query("SELECT * FROM employees WHERE salary = 70;");
+        assert_eq!(res_eq.len(), 1, "Eq should find exactly 1 record");
+        assert_eq!(res_eq[0].values[1], Value::Varchar("Charlie".into()));
+
+        // --- TEST 2: Greater Than (Gt) ---
+        // Should skip 70, and return 80 and 90
+        let res_gt = run_query("SELECT * FROM employees WHERE salary > 70;");
+        assert_eq!(res_gt.len(), 2, "Gt should find 2 records");
+        assert_eq!(res_gt[0].values[1], Value::Varchar("Diana".into()));
+        assert_eq!(res_gt[1].values[1], Value::Varchar("Eve".into()));
+
+        // --- TEST 3: Greater Than or Equal (Gte) ---
+        // Should include 70, 80, and 90
+        let res_gte = run_query("SELECT * FROM employees WHERE 70 <= salary;");
+        assert_eq!(res_gte.len(), 3, "Gte should find 3 records");
+        assert_eq!(res_gte[0].values[1], Value::Varchar("Charlie".into()));
+        assert_eq!(res_gte[2].values[1], Value::Varchar("Eve".into()));
+
+        // --- TEST 4: Less Than (Lt) ---
+        // Should start from the beginning and stop BEFORE 70 (returns 50, 60)
+        let res_lt = run_query("SELECT * FROM employees WHERE salary < 70;");
+        assert_eq!(res_lt.len(), 2, "Lt should find 2 records");
+        assert_eq!(res_lt[0].values[1], Value::Varchar("Alice".into()));
+        assert_eq!(res_lt[1].values[1], Value::Varchar("Bob".into()));
+
+        // --- TEST 5: Less Than or Equal (Lte) ---
+        // Should start from the beginning and stop AFTER 70 (returns 50, 60, 70)
+        let res_lte = run_query("SELECT * FROM employees WHERE salary <= 70;");
+        assert_eq!(res_lte.len(), 3, "Lte should find 3 records");
+        assert_eq!(res_lte[0].values[1], Value::Varchar("Alice".into()));
+        assert_eq!(res_lte[2].values[1], Value::Varchar("Charlie".into()));
+
+        // --- TEST 6: Empty Result Guard ---
+        // Ensures Point Lookup safely returns 0 rows if key doesn't exist
+        let res_empty = run_query("SELECT * FROM employees WHERE salary = 999;");
+        assert_eq!(
+            res_empty.len(),
+            0,
+            "Eq on non-existent key should return 0 rows"
+        );
+
+        // --- TEST 7: Range Scan Miss (Gte) ---
+        // Ensures Range Scan safely handles falling off the end of the B-Tree
+        let res_out_of_bounds = run_query("SELECT * FROM employees WHERE salary >= 999;");
+        assert_eq!(
+            res_out_of_bounds.len(),
+            0,
+            "Gte out of bounds should return 0 rows"
+        );
+
         cleanup_files(&db_path, &wal_path);
     }
 }

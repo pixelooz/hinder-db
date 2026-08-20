@@ -45,13 +45,13 @@ impl BpTreeIterator {
 
     /// Initializes a new targeted scan iterator starting at the given `start_key`; calling
     /// `next` will automatically fetch the starting key and start serving data.
-    pub fn new_at_key(root_page_id: PageId, start_key: u64) -> Self {
+    pub fn new_at_key(root_page_id: PageId, start_key: Option<u64>) -> Self {
         Self {
             root_page_id,
             curr_page_id: None,
             initialized: false,
             curr_slot_idx: 0,
-            start_key: Some(start_key),
+            start_key,
         }
     }
 
