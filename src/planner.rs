@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+
 use crate::{
-    catalog::manager::CatalogManager,
+    catalog::manager::{CatalogManager, IndexMeta},
     error::Error,
     execution::{
         Executor,
@@ -7,6 +9,7 @@ use crate::{
         delete::DeleteExecutor,
         emit::EmitExecutor,
         filter::FilterExecutor,
+        index::{IndexScanExecutor, IndexType},
         insert::InsertExecutor,
         iterator::BpTreeIterator,
         seq_scan::SeqScanExecutor,
@@ -109,6 +112,77 @@ impl<'a> Planner<'a> {
         Ok(query_plan)
     }
 
+    /// Analyses a bound predicate to find an exact-match condition on an indexed column.
+    fn find_indexable_condition<'b>(
+        &self,
+        bound_expr: &BoundExpr,
+        schema: &Schema,
+        indexes: &'b HashMap<String, IndexMeta>,
+    ) -> Option<(&'b IndexMeta, Value)> {
+        use BinaryOperator::*;
+        use BoundExpr::*;
+
+        match bound_expr {
+            BinaryOp { left, op: Eq, right } => {
+                if let ColumnRef { col_idx, .. } = **left
+                    && let Constant(val) = &**right
+                {
+                    let col_name = &schema.columns[col_idx].name;
+                    if let Some(meta) = indexes.get(col_name) {
+                        return Some((meta, val.clone()));
+                    }
+                }
+                if let ColumnRef { col_idx, .. } = **right
+                    && let Constant(val) = &**left
+                {
+                    let col_name = &schema.columns[col_idx].name;
+                    if let Some(meta) = indexes.get(col_name) {
+                        return Some((meta, val.clone()));
+                    }
+                }
+                None
+            }
+            BinaryOp { left, op: And, right } => self
+                .find_indexable_condition(left, schema, indexes)
+                .or_else(|| self.find_indexable_condition(right, schema, indexes)),
+            _ => None,
+        }
+    }
+
+    /// Determines the optimal scan type for the query type. If a where predicate is
+    /// present it attempts to build an indexed pipeline if an index is present on
+    /// any of the `ColumnReference`s if given. Otherwise falls back to sequential
+    /// scan executor.
+    fn build_index_or_seq_pipeline(
+        &self,
+        table_name: &str,
+        schema: &Schema,
+        bound_predicate: Option<&BoundExpr>,
+    ) -> Result<Box<dyn Executor>, Error> {
+        let primary_root_id = self.catalog.get_table_root(table_name)?;
+
+        // Attempt to use an Index scan if where clause is present.
+        // Look for an exact match predicate on an indexed column.
+        if let Some(predicate) = bound_predicate
+            && let Some(indexes) = self.catalog.get_table_indexes(table_name)
+            && let Some((index_meta, value)) =
+                self.find_indexable_condition(predicate, schema, indexes)
+        {
+            let search_key = value.to_index_key();
+            let scan_type = IndexType::Secondary { primary_root_id };
+            let iterator = BpTreeIterator::new_at_key(index_meta.root_page_id, search_key);
+            let index_executor = Box::new(IndexScanExecutor::new(
+                iterator,
+                scan_type,
+                search_key,
+                schema.clone(),
+            ));
+            return Ok(index_executor);
+        }
+        let iterator = BpTreeIterator::new(primary_root_id);
+        Ok(Box::new(SeqScanExecutor::new(iterator, schema.clone())))
+    }
+
     /// Plans a SELECT query, building a pipeline of SeqScan -> Filter.
     fn plan_select(&self, stmt: Select) -> Result<QueryPlan, Error> {
         let table_name = match stmt.from {
@@ -124,18 +198,20 @@ impl<'a> Planner<'a> {
                 ));
             }
         };
-        let root_page_id = self.catalog.get_table_root(&table_name)?;
-
         let base_schema = self.catalog.get_table_schema(&table_name)?;
-        let iterator = BpTreeIterator::new(root_page_id);
 
-        let mut pipeline: Box<dyn Executor> =
-            Box::new(SeqScanExecutor::new(iterator, base_schema.clone()));
+        // Bind the where clause early so we can use it for building the optimal pipeline.
+        let bound_predicate = match stmt.where_clause {
+            Some(where_expr) => {
+                Some(self.bind_expr(&where_expr, base_schema, Some(DataType::Boolean), None)?)
+            }
+            None => None,
+        };
+        let mut pipeline =
+            self.build_index_or_seq_pipeline(&table_name, base_schema, bound_predicate.as_ref())?;
 
-        if let Some(where_expr) = stmt.where_clause {
-            let bound_predicate =
-                self.bind_expr(&where_expr, base_schema, Some(DataType::Boolean), None)?;
-            pipeline = Box::new(FilterExecutor::new(pipeline, bound_predicate));
+        if let Some(predicate) = bound_predicate {
+            pipeline = Box::new(FilterExecutor::new(pipeline, predicate));
         }
         let is_star = matches!(
             &stmt.select_list[0].expr,
@@ -240,17 +316,20 @@ impl<'a> Planner<'a> {
     /// Translates the Ast Delete node into a physical `SeqScan -> Filter -> Delete` pipeline.
     /// Binds the optional where predicate if present.
     fn plan_delete(&self, stmt: Delete) -> Result<QueryPlan, Error> {
-        let root_page_id = self.catalog.get_table_root(&stmt.table_name)?;
         let schema = self.catalog.get_table_schema(&stmt.table_name)?;
 
-        let iterator = BpTreeIterator::new(root_page_id);
-        let mut pipeline: Box<dyn Executor> =
-            Box::new(SeqScanExecutor::new(iterator, schema.clone()));
+        // Bind the where clause early so we can use it for building the optimal pipeline.
+        let bound_predicate = match stmt.where_clause {
+            Some(where_expr) => {
+                Some(self.bind_expr(&where_expr, schema, Some(DataType::Boolean), None)?)
+            }
+            None => None,
+        };
+        let mut pipeline =
+            self.build_index_or_seq_pipeline(&stmt.table_name, schema, bound_predicate.as_ref())?;
 
-        if let Some(where_expr) = stmt.where_clause {
-            let bound_predicate =
-                self.bind_expr(&where_expr, schema, Some(DataType::Boolean), None)?;
-            pipeline = Box::new(FilterExecutor::new(pipeline, bound_predicate));
+        if let Some(predicate) = bound_predicate {
+            pipeline = Box::new(FilterExecutor::new(pipeline, predicate));
         }
         let delete_executor = Box::new(DeleteExecutor::new(
             pipeline,
@@ -268,16 +347,20 @@ impl<'a> Planner<'a> {
     /// Translates the Ast Update node into a physical `SeqScan -> Filter -> Update` pipeline.
     /// Performs type checking on all the SET assignments against the schema.
     fn plan_update(&self, stmt: Update) -> Result<QueryPlan, Error> {
-        let root_page_id = self.catalog.get_table_root(&stmt.table_name)?;
         let schema = self.catalog.get_table_schema(&stmt.table_name)?;
 
-        let iterator = BpTreeIterator::new(root_page_id);
-        let mut pipeline: Box<dyn Executor> =
-            Box::new(SeqScanExecutor::new(iterator, schema.clone()));
+        // Bind the where clause early so we can use it for building the optimal pipeline.
+        let bound_predicate = match stmt.where_clause {
+            Some(where_expr) => {
+                Some(self.bind_expr(&where_expr, schema, Some(DataType::Boolean), None)?)
+            }
+            None => None,
+        };
+        let mut pipeline =
+            self.build_index_or_seq_pipeline(&stmt.table_name, schema, bound_predicate.as_ref())?;
 
-        if let Some(where_expr) = stmt.where_clause {
-            let bound_expr = self.bind_expr(&where_expr, schema, Some(DataType::Boolean), None)?;
-            pipeline = Box::new(FilterExecutor::new(pipeline, bound_expr));
+        if let Some(predicate) = bound_predicate {
+            pipeline = Box::new(FilterExecutor::new(pipeline, predicate));
         }
         let mut exec_assignments = Vec::with_capacity(stmt.assignments.len());
 
