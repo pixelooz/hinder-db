@@ -92,7 +92,10 @@ impl Executor for UpdateExecutor {
                 let mut new_row_ids = Vec::with_capacity(existing_row_ids.len());
 
                 for chunk in existing_row_ids.chunks_exact(8) {
-                    let stored_id = u64::from_le_bytes(chunk.try_into().unwrap());
+                    let enc_chunk: [u8; 8] = chunk.try_into().map_err(|_| {
+                        Error::CorruptPage("invalid primary-key list chunk-length".into())
+                    })?;
+                    let stored_id = u64::from_le_bytes(enc_chunk);
                     if row_id != stored_id {
                         new_row_ids.extend_from_slice(chunk);
                     }
