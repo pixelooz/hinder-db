@@ -114,4 +114,12 @@ impl BpTreeIterator {
         }
         Ok(None)
     }
+
+    /// Resets the state to its initial uninitialized state. The call to next() will
+    /// re-fetch from the starting leaf page.
+    pub fn reset(&mut self) {
+        self.curr_page_id = None;
+        self.initialized = false;
+        self.curr_slot_idx = 0;
+    }
 }

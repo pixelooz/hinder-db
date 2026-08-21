@@ -3,6 +3,9 @@ use crate::{error::Error, relation::types::DataType};
 /// Represents a single column definition within a table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Column {
+    /// The table this column belongs to; needed for disambiguating column names during
+    /// JOIN operations. Ex: users.id vs posts.id.
+    pub table_name: Option<String>,
     pub name: String,
     pub data_type: DataType,
     pub length: Option<u32>,
@@ -10,8 +13,13 @@ pub struct Column {
 
 impl Column {
     /// Creates an initialized Column with the given parameters.
-    pub fn new(name: impl Into<String>, data_type: DataType, length: Option<u32>) -> Self {
+    #[rustfmt::skip]
+    pub fn new<T>(table_name: Option<T>, name: T, data_type: DataType, length: Option<u32>) -> Self
+    where
+        T: Into<String>
+    {
         Self {
+            table_name: table_name.map(Into::into),
             name: name.into(),
             data_type,
             length,
@@ -31,15 +39,39 @@ impl Schema {
         Self { columns }
     }
 
-    /// Finds the vector index of a column by its string name.
-    ///
-    /// # Note
-    /// This could be a HashMap but since row widths are minuscule, contiguous
-    /// memory iterations will generally outperform Map look ups.
+    /// Finds the index of a column by its string name.
     pub fn get_col_idx(&self, column_name: &str) -> Result<usize, Error> {
-        self.columns
-            .iter()
-            .position(|col| col.name == column_name)
-            .ok_or_else(|| Error::ColumnNotFound(column_name.to_string()))
+        self.get_col_idx_with_qualifier(None, column_name)
+    }
+
+    /// Finds the index of the column by its name, optionally filtered by table
+    /// qualifier.
+    pub fn get_col_idx_with_qualifier(
+        &self,
+        qualifier: Option<&str>,
+        column_name: &str,
+    ) -> Result<usize, Error> {
+        let mut found_idx = None;
+        for (idx, col) in self.columns.iter().enumerate() {
+            if col.name != column_name {
+                continue;
+            }
+            // If qualifier is empty, it defaults to true; accepts any table.
+            // If qualifier is given, it strictly compares against the col's table name.
+            let qualifier_matches =
+                qualifier.map_or(true, |q| col.table_name.as_deref() == Some(q));
+
+            if qualifier_matches {
+                // Checking for ambiguity. Duplicates aren't allowed as valid results.
+                if found_idx.is_some() {
+                    return Err(Error::SyntaxErr(format!(
+                        "column reference '{}' is ambiguous, add a table name qualifier",
+                        column_name
+                    )));
+                }
+                found_idx = Some(idx);
+            }
+        }
+        found_idx.ok_or_else(|| Error::ColumnNotFound(column_name.into()))
     }
 }

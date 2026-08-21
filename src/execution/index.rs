@@ -127,4 +127,10 @@ impl Executor for IndexScanExecutor {
             }
         }
     }
+
+    fn reset(&mut self) -> Result<(), Error> {
+        self.iterator.reset();
+        self.primary_row_ids = Vec::new().into_iter();
+        Ok(())
+    }
 }

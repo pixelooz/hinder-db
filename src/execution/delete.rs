@@ -78,4 +78,8 @@ impl Executor for DeleteExecutor {
         }
         Ok(Some(tuple))
     }
+
+    fn reset(&mut self) -> Result<(), Error> {
+        self.child.reset()
+    }
 }

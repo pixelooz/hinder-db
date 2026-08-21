@@ -42,4 +42,9 @@ impl Executor for ValuesExecutor {
         }
         Ok(Some(Tuple::new(evaluated_values)))
     }
+
+    fn reset(&mut self) -> Result<(), Error> {
+        self.cursor = 0;
+        Ok(())
+    }
 }

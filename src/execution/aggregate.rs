@@ -154,4 +154,10 @@ impl Executor for HashAggregateExecutor {
             Some(iterator) => Ok(iterator.next()),
         }
     }
+
+    fn reset(&mut self) -> Result<(), Error> {
+        self.child.reset()?;
+        self.output_iter = None;
+        Ok(())
+    }
 }

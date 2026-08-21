@@ -120,7 +120,7 @@ impl CatalogManager {
             let length = (field_length > 0).then_some(field_length as u32);
             let data_type = DataType::from_u8(field_type as u8)?;
 
-            let column = Column::new(field_name, data_type, length);
+            let column = Column::new(Some(table_name), field_name, data_type, length);
             raw_columns
                 .entry(table_name.to_string())
                 .or_default()
@@ -220,9 +220,15 @@ impl CatalogManager {
         &mut self,
         pool: &BufferPool,
         table_name: String,
-        schema: Schema,
+        mut schema: Schema,
         txn_id: u64,
     ) -> Result<(), Error> {
+        // Defensive loop ensuing all columns are tagged with this table name.
+        for col in &mut schema.columns {
+            if col.table_name.is_none() {
+                col.table_name = Some(table_name.clone())
+            }
+        }
         if self.table_roots.contains_key(&table_name) {
             return Err(Error::Duplicate(format!(
                 "table '{}' already exists",

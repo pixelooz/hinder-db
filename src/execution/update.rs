@@ -131,4 +131,8 @@ impl Executor for UpdateExecutor {
         }
         Ok(Some(new_tuple))
     }
+
+    fn reset(&mut self) -> Result<(), Error> {
+        self.child.reset()
+    }
 }

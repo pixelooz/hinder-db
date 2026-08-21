@@ -81,7 +81,12 @@ impl<'a> Planner<'a> {
     fn plan_create_table(&self, stmt: CreateTable) -> Result<QueryPlan, Error> {
         let mut columns = Vec::with_capacity(stmt.columns.len());
         for col_def in stmt.columns {
-            columns.push(Column::new(col_def.name, col_def.data_type, col_def.length));
+            columns.push(Column::new(
+                None,
+                col_def.name,
+                col_def.data_type,
+                col_def.length,
+            ));
         }
         let schema = Schema::new(columns);
 
@@ -332,7 +337,7 @@ impl<'a> Planner<'a> {
             // This lets us use user provided aliases and we infer the datatype from the schema.
             // For numbers, its not needed we differentiate between INT and BIGINT in the output
             // schema if it can't be inferred from the schema so we just use BIGINT.
-            output_cols.push(Column::new(col_name, data_type, None));
+            output_cols.push(Column::new(None, col_name, data_type, None));
             emit_exprs.push(bound_expr);
         }
         // Build the projection layer and the potentially aliased output schema.

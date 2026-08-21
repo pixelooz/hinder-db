@@ -72,4 +72,9 @@ impl Executor for CreateExecutor {
         self.has_executed = true;
         Ok(None)
     }
+
+    fn reset(&mut self) -> Result<(), Error> {
+        self.has_executed = false;
+        Ok(())
+    }
 }

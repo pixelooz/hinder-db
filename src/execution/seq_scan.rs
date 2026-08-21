@@ -37,4 +37,9 @@ impl Executor for SeqScanExecutor {
         tuple.row_id = Some(row_id);
         Ok(Some(tuple))
     }
+
+    fn reset(&mut self) -> Result<(), Error> {
+        self.iterator.reset();
+        Ok(())
+    }
 }

@@ -46,4 +46,8 @@ impl Executor for FilterExecutor {
             }
         }
     }
+
+    fn reset(&mut self) -> Result<(), Error> {
+        self.child.reset()
+    }
 }

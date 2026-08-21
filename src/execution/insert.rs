@@ -91,4 +91,8 @@ impl Executor for InsertExecutor {
         }
         Ok(Some(tuple))
     }
+
+    fn reset(&mut self) -> Result<(), Error> {
+        self.child.reset()
+    }
 }

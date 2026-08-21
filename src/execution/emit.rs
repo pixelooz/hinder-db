@@ -38,4 +38,8 @@ impl Executor for EmitExecutor {
         }
         Ok(Some(Tuple::new(values)))
     }
+
+    fn reset(&mut self) -> Result<(), Error> {
+        self.child.reset()
+    }
 }

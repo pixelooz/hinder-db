@@ -175,7 +175,7 @@ mod tests {
         Schema {
             columns: types
                 .into_iter()
-                .map(|x| Column::new(x.0, x.1, x.2))
+                .map(|x| Column::new(None, x.0, x.1, x.2))
                 .collect(),
         }
     }
