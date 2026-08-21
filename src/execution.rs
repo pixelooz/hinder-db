@@ -1,3 +1,4 @@
+pub(crate) mod aggregate;
 pub(crate) mod create;
 pub(crate) mod delete;
 pub(crate) mod emit;

@@ -5,6 +5,7 @@ use crate::{
     error::Error,
     execution::{
         Executor,
+        aggregate::{AggregateFunc, HashAggregateExecutor},
         create::{CreateExecutor, CreateOperation},
         delete::DeleteExecutor,
         emit::EmitExecutor,
@@ -23,8 +24,8 @@ use crate::{
     },
     sql::{
         ast::{
-            BinaryOperator, CreateIndex, CreateTable, Delete, Expr, Insert, Select, Statement,
-            TableReference, Update,
+            BinaryOperator, ColumnReference, CreateIndex, CreateTable, Delete, Expr, Insert,
+            Select, Statement, TableReference, Update,
         },
         parser::AstLiteral,
     },
@@ -248,6 +249,49 @@ impl<'a> Planner<'a> {
             &stmt.select_list[0].expr,
             Expr::Column(col_ref) if col_ref.column_name == "*"
         );
+        let mut aggregates = Vec::new();
+
+        for item in &stmt.select_list {
+            extract_aggregates(&item.expr, &mut aggregates);
+        }
+        let has_aggregates = !stmt.group_by.is_empty() || !aggregates.is_empty();
+
+        if is_star && has_aggregates {
+            return Err(Error::SyntaxErr(
+                "cannot use 'SELECT *' with GROUP BY or aggregate functions".into(),
+            ));
+        }
+        if has_aggregates {
+            let mut aggr_funcs = Vec::with_capacity(aggregates.len());
+            for aggregate in &aggregates {
+                match aggregate {
+                    Expr::Count(Some(col_ref)) => {
+                        let idx = base_schema.get_col_idx(&col_ref.column_name)?;
+                        aggr_funcs.push(AggregateFunc::Count(idx));
+                    }
+                    Expr::Count(None) => aggr_funcs.push(AggregateFunc::CountStar),
+                    Expr::Average(col_ref) => {
+                        let idx = base_schema.get_col_idx(&col_ref.column_name)?;
+                        let data_type = base_schema.columns[idx].data_type;
+
+                        // AVG requires numeric columns.
+                        if !matches!(data_type, DataType::Int | DataType::BigInt) {
+                            return Err(Error::SyntaxErr(format!(
+                                "function AVG() cannot be applied to column '{}' of type {:?}",
+                                col_ref.column_name, data_type
+                            )));
+                        }
+                        aggr_funcs.push(AggregateFunc::Average(idx));
+                    }
+                    _ => unreachable!("extract_aggregates only yields COUNT or AVERAGE"),
+                }
+            }
+            let mut gb_indices = Vec::with_capacity(stmt.group_by.len());
+            for gb in &stmt.group_by {
+                gb_indices.push(base_schema.get_col_idx(&gb.column_name)?);
+            }
+            pipeline = Box::new(HashAggregateExecutor::new(pipeline, gb_indices, aggr_funcs))
+        }
         if stmt.select_list.len() == 1 && is_star {
             let query_plan = QueryPlan {
                 executor: pipeline,
@@ -256,14 +300,27 @@ impl<'a> Planner<'a> {
             };
             return Ok(query_plan);
         }
+        let aggregate_ctx = if has_aggregates {
+            Some(AggregateContext {
+                group_bys: &stmt.group_by,
+                aggregates: &aggregates,
+            })
+        } else {
+            None
+        };
         let mut emit_exprs = Vec::with_capacity(stmt.select_list.len());
         let mut output_cols = Vec::with_capacity(stmt.select_list.len());
 
         for (idx, derived_cols) in stmt.select_list.into_iter().enumerate() {
             let inferred_type = self.infer_expr_type(&derived_cols.expr, base_schema)?;
-            let bound_expr =
-                self.bind_expr(&derived_cols.expr, base_schema, inferred_type, None)?;
 
+            // Using bind_emit_expr to handle aggregates.
+            let bound_expr = self.bind_emit_expr(
+                &derived_cols.expr,
+                base_schema,
+                inferred_type,
+                aggregate_ctx.as_ref(),
+            )?;
             let col_name = derived_cols
                 .alias
                 .unwrap_or_else(|| match derived_cols.expr {
@@ -278,9 +335,9 @@ impl<'a> Planner<'a> {
             output_cols.push(Column::new(col_name, data_type, None));
             emit_exprs.push(bound_expr);
         }
-        // Build the project layer and the potentially aliased output schema.
-        pipeline = Box::new(EmitExecutor::new(pipeline, emit_exprs));
+        // Build the projection layer and the potentially aliased output schema.
         let output_schema = Schema::new(output_cols);
+        pipeline = Box::new(EmitExecutor::new(pipeline, emit_exprs));
 
         let query_plan = QueryPlan {
             executor: pipeline,
@@ -545,5 +602,96 @@ impl<'a> Planner<'a> {
                 ))),
             },
         }
+    }
+
+    /// A specialized binder for the Projection layer that maps AST expressions
+    /// directly to the output of the HashAggregator.
+    fn bind_emit_expr(
+        &self,
+        expr: &Expr,
+        schema: &Schema,
+        expected_type: Option<DataType>,
+        aggregate_ctx: Option<&AggregateContext>,
+    ) -> Result<BoundExpr, Error> {
+        if let Some(ctx) = aggregate_ctx {
+            // Is it an aggregate function? Map it to the end of the tuple.
+            if let Some(pos) = ctx.aggregates.iter().position(|e| e == expr) {
+                return Ok(BoundExpr::ColumnRef {
+                    col_idx: ctx.group_bys.len() + pos,
+                    data_type: DataType::BigInt, // COUNT and AVG always return BigInt.
+                });
+            }
+            // Is it a column? Must be part of the GROUP BY clause.
+            if let Expr::Column(col_ref) = expr {
+                if let Some(pos) = ctx.group_bys.iter().position(|gb| gb == col_ref) {
+                    let idx = schema.get_col_idx(&col_ref.column_name)?;
+                    let data_type = schema.columns[idx].data_type;
+                    return Ok(BoundExpr::ColumnRef {
+                        col_idx: pos,
+                        data_type,
+                    });
+                } else {
+                    return Err(Error::SyntaxErr(format!(
+                        "column '{}' must appear in the GROUP BY clause or be used in an aggregate function",
+                        col_ref.column_name,
+                    )));
+                }
+            }
+            // If it's a binary operation (COUNT(id) + 1), recursively bind the children.
+            if let Expr::BinaryOp { left, op, right } = expr {
+                let right_type = self.infer_expr_type(right, schema)?;
+                let left_type = self.infer_expr_type(left, schema)?;
+
+                // If one side has a definitively known type, propagate that type
+                // to the other side to enforce coercion.
+                let type_for_left = right_type.or(expected_type);
+                let type_for_right = left_type.or(expected_type);
+
+                let bound_left = self.bind_emit_expr(left, schema, type_for_left, aggregate_ctx)?;
+                let bound_right =
+                    self.bind_emit_expr(right, schema, type_for_right, aggregate_ctx)?;
+
+                return Ok(BoundExpr::BinaryOp {
+                    left: Box::new(bound_left),
+                    op: *op,
+                    right: Box::new(bound_right),
+                });
+            }
+        }
+        // Fallback to standard binding for non-aggregate queries or raw-literals.
+        self.bind_expr(expr, schema, expected_type, None)
+    }
+}
+
+/// This struct acts as a "Virtual Schema", allowing the Planner to map AST expressions
+/// to the new physical indices output by the aggregator.
+///
+/// It holds borrowed references to the AST's `GROUP BY` clauses and the deduplicated
+/// aggregate expressions (`COUNT`, `AVG`).
+struct AggregateContext<'a> {
+    group_bys: &'a [ColumnReference],
+    aggregates: &'a [Expr],
+}
+
+/// Recursively scan an AST expression to extract aggregate functions.
+///
+/// If a user queries `SELECT COUNT(id), COUNT(id) / 2`, it won't record the second COUNT(id).
+/// This ensures the executor only computes `COUNT(id)` exactly once saving on execution cost.
+/// The `ProjectExecutor` will simply read that single computed value twice.
+///
+/// It appends unique `Expr::Count` and `Expr::Average` AST nodes  into the mutable `aggregates`
+/// vector.
+fn extract_aggregates(expr: &Expr, aggregates: &mut Vec<Expr>) {
+    match expr {
+        Expr::Count(_) | Expr::Average(_) => {
+            if !aggregates.contains(expr) {
+                aggregates.push(expr.clone());
+            }
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            extract_aggregates(left, aggregates);
+            extract_aggregates(right, aggregates);
+        }
+        _ => {}
     }
 }
