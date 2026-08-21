@@ -58,8 +58,7 @@ impl Schema {
             }
             // If qualifier is empty, it defaults to true; accepts any table.
             // If qualifier is given, it strictly compares against the col's table name.
-            let qualifier_matches =
-                qualifier.map_or(true, |q| col.table_name.as_deref() == Some(q));
+            let qualifier_matches = qualifier.is_none_or(|q| col.table_name.as_deref() == Some(q));
 
             if qualifier_matches {
                 // Checking for ambiguity. Duplicates aren't allowed as valid results.
