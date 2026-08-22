@@ -105,7 +105,7 @@ impl HashAggregateExecutor {
 impl Executor for HashAggregateExecutor {
     fn next(&mut self, ctx: &mut ExecutionContext) -> Result<Option<Tuple>, Error> {
         if let Some(iterator) = &mut self.output_iter {
-            return Ok(iterator.next());
+            Ok(iterator.next())
         } else {
             let mut groups = HashMap::new();
             let mut had_input = false;
