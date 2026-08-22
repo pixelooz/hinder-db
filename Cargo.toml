@@ -1,5 +1,5 @@
 [package]
-name = "xelo-db"
+name = "hinderdb"
 version = "0.1.0"
 edition = "2024"
 
