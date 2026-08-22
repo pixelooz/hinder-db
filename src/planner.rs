@@ -13,6 +13,7 @@ use crate::{
         index::{IndexScanExecutor, IndexType},
         insert::InsertExecutor,
         iterator::BpTreeIterator,
+        join::BlockNestedLoopJoinExecutor,
         seq_scan::SeqScanExecutor,
         update::{ExecAssignment, UpdateExecutor},
         value::ValuesExecutor,
@@ -220,33 +221,99 @@ impl<'a> Planner<'a> {
         Ok(Box::new(SeqScanExecutor::new(iterator, schema.clone())))
     }
 
+    /// Recursively computes the logical schema for a typical join operation from a
+    /// typical `TableReference` tree.
+    fn compute_table_reference_schema(&self, table_ref: &TableReference) -> Result<Schema, Error> {
+        match table_ref {
+            TableReference::BaseTable { name, alias } => {
+                let mut schema = self.catalog.get_table_schema(name)?.clone();
+                let effective_name = alias.as_ref().unwrap_or(name).clone();
+                for col in &mut schema.columns {
+                    col.table_name = Some(effective_name.clone());
+                }
+                Ok(schema)
+            }
+            TableReference::Join(join) => {
+                let left_schema = self.compute_table_reference_schema(&join.left)?;
+                let right_schema = self.compute_table_reference_schema(&join.right)?;
+
+                let joined_columns = left_schema
+                    .columns
+                    .into_iter()
+                    .chain(right_schema.columns)
+                    .collect();
+                Ok(Schema::new(joined_columns))
+            }
+        }
+    }
+
+    /// Recursively builds a JOIN execution pipeline from a `TableReference` tree.
+    fn plan_join_execution(&self, table_ref: &TableReference) -> Result<Box<dyn Executor>, Error> {
+        match table_ref {
+            TableReference::BaseTable { name, .. } => {
+                let schema = self.compute_table_reference_schema(table_ref)?;
+                // We have to pass NONE here because we don't have cost based optimization
+                // meaning our join will, for each table, scan all the records before only
+                // keeping the ones requested, by passing them through the filter executor.
+                // Building the CBO will take a lot of time, I just don't have plus it
+                // complicates the entire build as its an optimization only real databases
+                // need and not applicable in our case. The algorithms for joins still stand.
+                self.build_index_or_seq_pipeline(name, &schema, None)
+            }
+            TableReference::Join(join) => {
+                let left_exec = self.plan_join_execution(&join.left)?;
+                let right_exec = self.plan_join_execution(&join.right)?;
+
+                let left_schema = self.compute_table_reference_schema(&join.left)?;
+                let right_schema = self.compute_table_reference_schema(&join.right)?;
+
+                #[rustfmt::skip]
+                let joined_columns = left_schema.columns.iter()
+                    .chain(right_schema.columns.iter())
+                    .cloned()
+                    .collect();
+
+                let joined_schema = Schema::new(joined_columns);
+                let bound_condition = self.bind_expr(
+                    &join.condition,
+                    &joined_schema,
+                    Some(DataType::Boolean),
+                    None,
+                )?;
+                Ok(Box::new(BlockNestedLoopJoinExecutor::new(
+                    left_exec,
+                    right_exec,
+                    join.join_type,
+                    bound_condition,
+                    right_schema.columns.len(),
+                )))
+            }
+        }
+    }
+
     /// Plans a SELECT query, building a pipeline of SeqScan -> Filter.
     fn plan_select(&self, stmt: Select) -> Result<QueryPlan, Error> {
-        let table_name = match stmt.from {
-            Some(TableReference::BaseTable { name, .. }) => name,
-            Some(TableReference::Join(_)) => {
-                return Err(Error::NotImplementedYet(
-                    "Joins are not yet supported".into(),
-                ));
-            }
+        let schema = match &stmt.from {
+            Some(table_ref) => self.compute_table_reference_schema(table_ref)?,
             None => {
                 return Err(Error::NotImplementedYet(
                     "SELECT without FROM is not supported".into(),
                 ));
             }
         };
-        let base_schema = self.catalog.get_table_schema(&table_name)?;
-
         // Bind the where clause early so we can use it for building the optimal pipeline.
         let bound_predicate = match stmt.where_clause {
             Some(where_expr) => {
-                Some(self.bind_expr(&where_expr, base_schema, Some(DataType::Boolean), None)?)
+                Some(self.bind_expr(&where_expr, &schema, Some(DataType::Boolean), None)?)
             }
             None => None,
         };
-        let mut pipeline =
-            self.build_index_or_seq_pipeline(&table_name, base_schema, bound_predicate.as_ref())?;
-
+        let mut pipeline = match stmt.from.as_ref().unwrap() {
+            TableReference::BaseTable { name, .. } => {
+                self.build_index_or_seq_pipeline(name, &schema, bound_predicate.as_ref())?
+            }
+            TableReference::Join(_) => self.plan_join_execution(stmt.from.as_ref().unwrap())?,
+        };
         if let Some(predicate) = bound_predicate {
             pipeline = Box::new(FilterExecutor::new(pipeline, predicate));
         }
@@ -271,13 +338,19 @@ impl<'a> Planner<'a> {
             for aggregate in &aggregates {
                 match aggregate {
                     Expr::Count(Some(col_ref)) => {
-                        let idx = base_schema.get_col_idx(&col_ref.column_name)?;
+                        let idx = schema.get_col_idx_with_qualifier(
+                            col_ref.qualifier.as_deref(),
+                            &col_ref.column_name,
+                        )?;
                         aggr_funcs.push(AggregateFunc::Count(idx));
                     }
                     Expr::Count(None) => aggr_funcs.push(AggregateFunc::CountStar),
                     Expr::Average(col_ref) => {
-                        let idx = base_schema.get_col_idx(&col_ref.column_name)?;
-                        let data_type = base_schema.columns[idx].data_type;
+                        let idx = schema.get_col_idx_with_qualifier(
+                            col_ref.qualifier.as_deref(),
+                            &col_ref.column_name,
+                        )?;
+                        let data_type = schema.columns[idx].data_type;
 
                         // AVG requires numeric columns.
                         if !matches!(data_type, DataType::Int | DataType::BigInt) {
@@ -293,14 +366,16 @@ impl<'a> Planner<'a> {
             }
             let mut gb_indices = Vec::with_capacity(stmt.group_by.len());
             for gb in &stmt.group_by {
-                gb_indices.push(base_schema.get_col_idx(&gb.column_name)?);
+                gb_indices.push(
+                    schema.get_col_idx_with_qualifier(gb.qualifier.as_deref(), &gb.column_name)?,
+                );
             }
             pipeline = Box::new(HashAggregateExecutor::new(pipeline, gb_indices, aggr_funcs))
         }
         if stmt.select_list.len() == 1 && is_star {
             let query_plan = QueryPlan {
                 executor: pipeline,
-                schema: base_schema.clone(),
+                schema: schema.clone(),
                 is_query: true,
             };
             return Ok(query_plan);
@@ -317,12 +392,12 @@ impl<'a> Planner<'a> {
         let mut output_cols = Vec::with_capacity(stmt.select_list.len());
 
         for (idx, derived_cols) in stmt.select_list.into_iter().enumerate() {
-            let inferred_type = self.infer_expr_type(&derived_cols.expr, base_schema)?;
+            let inferred_type = self.infer_expr_type(&derived_cols.expr, &schema)?;
 
             // Using bind_emit_expr to handle aggregates.
             let bound_expr = self.bind_emit_expr(
                 &derived_cols.expr,
-                base_schema,
+                &schema,
                 inferred_type,
                 aggregate_ctx.as_ref(),
             )?;
@@ -503,7 +578,10 @@ impl<'a> Planner<'a> {
     ) -> Result<BoundExpr, Error> {
         match expr {
             Expr::Column(col_ref) => {
-                let col_idx = schema.get_col_idx(&col_ref.column_name)?;
+                let col_idx = schema.get_col_idx_with_qualifier(
+                    col_ref.qualifier.as_deref(),
+                    &col_ref.column_name,
+                )?;
                 let data_type = schema.columns[col_idx].data_type;
                 Ok(BoundExpr::ColumnRef { col_idx, data_type })
             }
@@ -539,7 +617,10 @@ impl<'a> Planner<'a> {
     fn infer_expr_type(&self, expr: &Expr, schema: &Schema) -> Result<Option<DataType>, Error> {
         match expr {
             Expr::Column(col_ref) => {
-                let col_idx = schema.get_col_idx(&col_ref.column_name)?;
+                let col_idx = schema.get_col_idx_with_qualifier(
+                    col_ref.qualifier.as_deref(),
+                    &col_ref.column_name,
+                )?;
                 Ok(Some(schema.columns[col_idx].data_type))
             }
             /* Literals have flexible types (Ex: AstLiteral::Int can be Int or BigInt).
@@ -629,7 +710,10 @@ impl<'a> Planner<'a> {
             // Is it a column? Must be part of the GROUP BY clause.
             if let Expr::Column(col_ref) = expr {
                 if let Some(pos) = ctx.group_bys.iter().position(|gb| gb == col_ref) {
-                    let idx = schema.get_col_idx(&col_ref.column_name)?;
+                    let idx = schema.get_col_idx_with_qualifier(
+                        col_ref.qualifier.as_deref(),
+                        &col_ref.column_name,
+                    )?;
                     let data_type = schema.columns[idx].data_type;
                     return Ok(BoundExpr::ColumnRef {
                         col_idx: pos,
