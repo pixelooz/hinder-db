@@ -177,22 +177,36 @@ mod tests {
 
         let mut query = "CREATE TABLE users (id INT, name VARCHAR(100))";
         let result_set = conn.execute(query).expect("CREATE TABLE failed");
-
         dbg!(result_set);
 
         query = "CREATE INDEX idx_name ON users(name)";
         let result_set = conn.execute(query).expect("CREATE INDEX failed");
-
         dbg!(result_set);
 
-        query = "INSERT INTO users VALUES (1, 'parth'), (2, 'juhi');";
-        let result_set = conn.execute(query).expect("INSERT INTO failed");
-
+        query = "CREATE TABLE account (id INT, money INT)";
+        let result_set = conn.execute(query).expect("CREATE TABLE failed");
         dbg!(result_set);
 
-        query = "SELECT id AS my_id, name AS not_my_name FROM users";
-        let result_set = conn.execute(query).expect("INSERT INTO failed");
+        query = "CREATE INDEX idx_money ON account(money)";
+        let result_set = conn.execute(query).expect("CREATE INDEX failed");
+        dbg!(result_set);
 
+        query = "
+            INSERT INTO users VALUES (1, 'parth'), (2, 'juhi'), (3, 'parth2'),
+            (4, 'juhi2'), (5, 'parth3'), (6, 'juhi3'), (7, 'parth4');";
+        let result_set = conn.execute(query).expect("INSERT INTO failed");
+        dbg!(result_set);
+
+        query = " INSERT INTO account VALUES (1, 0), (2, 100), (3, 00), (4, 1000);";
+        let result_set = conn.execute(query).expect("INSERT INTO failed");
+        dbg!(result_set);
+
+        query = "
+            SELECT u.id AS my_id, name AS not_my_name, money as dont_have_any
+            FROM users AS u LEFT JOIN account AS a ON u.id = a.id
+            WHERE u.id < 7 ORDER BY my_id DESC;
+            ";
+        let result_set = conn.execute(query).expect("SELECT failed");
         dbg!(result_set);
 
         cleanup_files(&db_path, &wal_path);

@@ -14,7 +14,9 @@ use crate::{
         insert::InsertExecutor,
         iterator::BpTreeIterator,
         join::BlockNestedLoopJoinExecutor,
+        limit::LimitOffsetExecutor,
         seq_scan::SeqScanExecutor,
+        sort::SortExecutor,
         update::{ExecAssignment, UpdateExecutor},
         value::ValuesExecutor,
     },
@@ -419,6 +421,21 @@ impl<'a> Planner<'a> {
         let output_schema = Schema::new(output_cols);
         pipeline = Box::new(EmitExecutor::new(pipeline, emit_exprs));
 
+        if !stmt.order_by.is_empty() {
+            let mut sort_keys = Vec::with_capacity(stmt.order_by.len());
+            for sort_spec in stmt.order_by {
+                // Resolving against the output schema so that aliases work as expected.
+                let idx = output_schema.get_col_idx_with_qualifier(
+                    sort_spec.column.qualifier.as_deref(),
+                    &sort_spec.column.column_name,
+                )?;
+                sort_keys.push((idx, sort_spec.descending));
+            }
+            pipeline = Box::new(SortExecutor::new(pipeline, sort_keys));
+        }
+        if stmt.limit.is_some() || stmt.offset.is_some() {
+            pipeline = Box::new(LimitOffsetExecutor::new(pipeline, stmt.limit, stmt.offset));
+        }
         let query_plan = QueryPlan {
             executor: pipeline,
             schema: output_schema,
