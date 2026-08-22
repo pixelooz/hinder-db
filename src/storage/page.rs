@@ -11,7 +11,7 @@ use crate::error::Error;
 /// Size of an element in the index/offset array (u16).
 pub const SLOT_ELEM_SIZE: usize = 2;
 
-/// Size of any page in pellet-db, around 8KiB. We don't have true slotted page architecture,
+/// Size of any page in xelo-db, around 8KiB. We don't have true slotted page architecture,
 /// where larger pages are written to another page which the slotted/normal leaf node just
 /// holds a pointer to (I'll try that later).
 pub const PAGE_SIZE: usize = 8192;
@@ -959,7 +959,7 @@ mod tests {
             .as_nanos();
         // FIXME: provide a way to pass custom paths for testing, db-files, etc.
         format!(
-            "/Volumes/External T7/pellet_db_test_{}_{}.db",
+            "/Volumes/External T7/xelo_db_test_{}_{}.db",
             test_name, timestamp
         )
     }
@@ -984,14 +984,14 @@ mod tests {
         write_cursor.write_u16(u16::MAX);
         write_cursor.write_u32(123456789);
         write_cursor.write_u64(u64::MAX);
-        write_cursor.write_bytes(b"pellet-db");
+        write_cursor.write_bytes(b"xelo-db");
 
         let mut read_cursor = ByteCursor::new(&mut buffer);
         assert_eq!(read_cursor.read_u8(), 42);
         assert_eq!(read_cursor.read_u16(), u16::MAX);
         assert_eq!(read_cursor.read_u32(), 123456789);
         assert_eq!(read_cursor.read_u64(), u64::MAX);
-        assert_eq!(read_cursor.read_bytes(9), b"pellet-db");
+        assert_eq!(read_cursor.read_bytes(9), b"xelo-db");
     }
 
     /// Validates round-trip encoding and decoding of an empty LeafNode without
