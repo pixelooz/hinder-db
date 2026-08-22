@@ -19,10 +19,10 @@ use crate::{
 /// decision because of CPU cache locality. Tuple is a heavy struct and adding
 /// bool into that will introduce 7 bytes of padding since bool only takes 1 byte
 /// each. So previously where the cpu could just breeze through the bool vectors,
-/// if we were to change it, it would have to perform look ups which could be
-/// worse performance wise. Now, I don't care how fast this database ends up being
-/// but this was a nice detail that I learnt; I don't know if it applies exactly
-/// in this case but yeah.
+/// if we were to change it, it would have to perform look ups which could be worse
+/// memory/performance wise. Now, I don't care how fast this database ends up being
+/// but this was a nice detail that I learnt; I don't know how much it applies exactly
+/// in our case since we never just iterate but yeah at-least we save 7*x bytes hehe.
 pub struct BlockNestedLoopJoinExecutor {
     left_child: Box<dyn Executor>,
     right_child: Box<dyn Executor>,
