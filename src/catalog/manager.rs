@@ -134,16 +134,16 @@ impl CatalogManager {
         self.table_schemas.extend(raw_col_iterator);
 
         Self::scan_system_table(pool, SYS_INDEXES_ROOT_ID, &sys_index_schema(), |tuple| {
-            let table_name = tuple.values[0].varchar_to_str().ok_or_else(|| {
-                Error::CorruptPage(format!(
-                    "sys_index table_name is not varchar, got: {:?}",
-                    tuple.values[0]
-                ))
-            })?;
-            let index_name = tuple.values[1].varchar_to_str().ok_or_else(|| {
+            let index_name = tuple.values[0].varchar_to_str().ok_or_else(|| {
                 Error::CorruptPage(format!(
                     "sys_index index_name is not Varchar, got: {:?}",
                     tuple.values[1]
+                ))
+            })?;
+            let table_name = tuple.values[1].varchar_to_str().ok_or_else(|| {
+                Error::CorruptPage(format!(
+                    "sys_index table_name is not varchar, got: {:?}",
+                    tuple.values[0]
                 ))
             })?;
             let col_name = tuple.values[2].varchar_to_str().ok_or_else(|| {
