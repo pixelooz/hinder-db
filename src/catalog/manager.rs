@@ -312,6 +312,15 @@ impl CatalogManager {
                 index_name, table_name
             )));
         }
+        if let Some(exist_index) = table_indexes
+            .values()
+            .find(|&col| col.column_name == column_name)
+        {
+            return Err(Error::Duplicate(format!(
+                "column '{}' is already indexed by '{}' in table '{}'",
+                column_name, exist_index.index_name, table_name
+            )));
+        }
         // Creating a new index page and immediately marking it dirty without writing
         // anything into it because this is just the creation of the page and needed
         // root_page_id for this index. When data is inserted into the indexes, we'll
