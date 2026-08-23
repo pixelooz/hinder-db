@@ -253,7 +253,6 @@ impl CatalogManager {
         let sys_row_id = self
             .next_sys_row_id
             .fetch_add(1, Ordering::SeqCst);
-
         sys_table_roots_tree.insert(sys_row_id, roots_buffer, txn_id)?;
 
         // Insert into sys_schema_page
@@ -273,7 +272,6 @@ impl CatalogManager {
             let sys_row_id = self
                 .next_sys_row_id
                 .fetch_add(1, Ordering::SeqCst);
-
             sys_schema_tree.insert(sys_row_id, schema_buffer, txn_id)?;
         }
         // Update in-memory cache
@@ -314,11 +312,16 @@ impl CatalogManager {
                 index_name, table_name
             )));
         }
+        // Creating a new index page and immediately marking it dirty without writing
+        // anything into it because this is just the creation of the page and needed
+        // root_page_id for this index. When data is inserted into the indexes, we'll
+        // consult the index_roots map on catalog to get this exact root_page_id.
         let (root_page_id, root_frame) = pool.new_page(true)?;
         pool.begin_page_mutation(root_page_id, txn_id)?;
         root_frame.write().mark_dirty();
 
-        let sys_index_tree = BpTree::new(pool, root_page_id);
+        // Open the sys_index_page to write to it the schema of this index.
+        let sys_index_tree = BpTree::new(pool, SYS_INDEXES_ROOT_ID);
         let index_tuple = Tuple::new(vec![
             Value::Varchar(index_name.clone()),
             Value::Varchar(table_name.clone()),
