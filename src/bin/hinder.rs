@@ -50,12 +50,16 @@ fn main() {
                         ".EXIT" | ".QUIT" => break,
                         ".HELP" => {
                             println!("Meta Commands:");
-                            println!("  .exit / .quit    Exit the REPL");
-                            println!("  .help            Show this message");
-                            println!("\nSQL Commands:");
-                            println!("  CREATE DATABASE <name>;");
-                            println!("  USE <name>;");
-                            println!("  <Standard SQL...>;");
+                            println!("To Exit the REPL   : .exit / .quit");
+                            println!("Show this message  : .help");
+                            println!();
+                            println!("SQL Commands:");
+                            println!("CREATE DATABASE <name>;");
+                            println!("USE <db_name>;");
+                            println!("SHOW DATABASES;");
+                            println!();
+                            println!("Inside a database instance:");
+                            println!(" >> Standard SQL commands...");
                             continue;
                         }
                         _ => {
