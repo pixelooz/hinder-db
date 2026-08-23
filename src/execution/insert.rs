@@ -35,15 +35,8 @@ impl Executor for InsertExecutor {
         let Some(tuple) = self.child.next(ctx)? else {
             return Ok(None);
         };
-        let next_row_id = ctx
-            .catalog
-            .read()
-            .generate_next_row_id(&self.table_name)?;
-
-        let primary_root_id = ctx
-            .catalog
-            .read()
-            .get_table_root(&self.table_name)?;
+        let next_row_id = ctx.catalog.read().generate_next_row_id(&self.table_name)?;
+        let primary_root_id = ctx.catalog.read().get_table_root(&self.table_name)?;
 
         let primary_tree = BpTree::new(ctx.buffer_pool, primary_root_id);
         ctx.block_buffer.clear();
