@@ -341,6 +341,8 @@ impl CatalogManager {
             ),
         ]);
         let mut index_buffer = Vec::new();
+        /* * FIXME: Add checking length limits in the schema against the user given data
+        before encoding. */
         index_tuple.encode(&sys_index_schema(), &mut index_buffer)?;
 
         let sys_row_id = self.next_sys_row_id.fetch_add(1, Ordering::SeqCst);
