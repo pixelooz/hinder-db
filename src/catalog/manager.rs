@@ -134,26 +134,36 @@ impl CatalogManager {
         self.table_schemas.extend(raw_col_iterator);
 
         Self::scan_system_table(pool, SYS_INDEXES_ROOT_ID, &sys_index_schema(), |tuple| {
-            let table_name = tuple.values[0]
-                .varchar_to_str()
-                .ok_or_else(|| Error::CorruptPage("sys_index table_name is not varchar".into()))?;
-
-            let index_name = tuple.values[1]
-                .varchar_to_str()
-                .ok_or_else(|| Error::CorruptPage("sys_index index_name is not Varchar".into()))?;
-
-            let col_name = tuple.values[2]
-                .varchar_to_str()
-                .ok_or_else(|| Error::CorruptPage("sys_index col_name is not Varchar".into()))?;
-
-            let root_page_id = tuple.values[3]
-                .bigint_to_i64()
-                .ok_or_else(|| Error::CorruptPage("sys_index root_page_id is not BigInt".into()))?;
-
-            let is_unique = tuple.values[4]
-                .boolean_to_bool()
-                .ok_or_else(|| Error::CorruptPage("sys_index is_unique is not Boolean".into()))?;
-
+            let table_name = tuple.values[0].varchar_to_str().ok_or_else(|| {
+                Error::CorruptPage(format!(
+                    "sys_index table_name is not varchar, got: {:?}",
+                    tuple.values[0]
+                ))
+            })?;
+            let index_name = tuple.values[1].varchar_to_str().ok_or_else(|| {
+                Error::CorruptPage(format!(
+                    "sys_index index_name is not Varchar, got: {:?}",
+                    tuple.values[1]
+                ))
+            })?;
+            let col_name = tuple.values[2].varchar_to_str().ok_or_else(|| {
+                Error::CorruptPage(format!(
+                    "sys_index col_name is not Varchar, got: {:?}",
+                    tuple.values[2]
+                ))
+            })?;
+            let is_unique = tuple.values[3].boolean_to_bool().ok_or_else(|| {
+                Error::CorruptPage(format!(
+                    "sys_index is_unique is not Boolean, got: {:?}",
+                    tuple.values[4]
+                ))
+            })?;
+            let root_page_id = tuple.values[4].bigint_to_i64().ok_or_else(|| {
+                Error::CorruptPage(format!(
+                    "sys_index root_page_id is not BigInt, got: {:?}",
+                    tuple.values[3]
+                ))
+            })?;
             let index_meta = IndexMeta {
                 index_name: index_name.to_string(),
                 column_name: col_name.to_string(),
@@ -250,9 +260,7 @@ impl CatalogManager {
         let mut roots_buffer = Vec::new();
         page_root_tuple.encode(&sys_pages_schema(), &mut roots_buffer)?;
 
-        let sys_row_id = self
-            .next_sys_row_id
-            .fetch_add(1, Ordering::SeqCst);
+        let sys_row_id = self.next_sys_row_id.fetch_add(1, Ordering::SeqCst);
         sys_table_roots_tree.insert(sys_row_id, roots_buffer, txn_id)?;
 
         // Insert into sys_schema_page
@@ -269,18 +277,13 @@ impl CatalogManager {
             let mut schema_buffer = Vec::new();
             schema_tuple.encode(&sys_schema, &mut schema_buffer)?;
 
-            let sys_row_id = self
-                .next_sys_row_id
-                .fetch_add(1, Ordering::SeqCst);
+            let sys_row_id = self.next_sys_row_id.fetch_add(1, Ordering::SeqCst);
             sys_schema_tree.insert(sys_row_id, schema_buffer, txn_id)?;
         }
         // Update in-memory cache
-        self.table_roots
-            .insert(table_name.clone(), root_page_id);
-        self.table_schemas
-            .insert(table_name.clone(), schema);
-        self.table_row_ids
-            .insert(table_name, AtomicU64::new(1));
+        self.table_roots.insert(table_name.clone(), root_page_id);
+        self.table_schemas.insert(table_name.clone(), schema);
+        self.table_row_ids.insert(table_name, AtomicU64::new(1));
         Ok(())
     }
 
@@ -301,10 +304,7 @@ impl CatalogManager {
                 column_name, table_name
             )));
         }
-        let table_indexes = self
-            .index_roots
-            .entry(table_name.clone())
-            .or_default();
+        let table_indexes = self.index_roots.entry(table_name.clone()).or_default();
 
         if table_indexes.contains_key(&index_name) {
             return Err(Error::Duplicate(format!(
@@ -334,9 +334,7 @@ impl CatalogManager {
         let mut index_buffer = Vec::new();
         index_tuple.encode(&sys_index_schema(), &mut index_buffer)?;
 
-        let sys_row_id = self
-            .next_sys_row_id
-            .fetch_add(1, Ordering::SeqCst);
+        let sys_row_id = self.next_sys_row_id.fetch_add(1, Ordering::SeqCst);
         sys_index_tree.insert(sys_row_id, index_buffer, txn_id)?;
 
         let index_meta = IndexMeta {
