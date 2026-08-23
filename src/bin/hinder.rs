@@ -1,4 +1,4 @@
-use std::{env, fs};
+use std::{env, ffi::OsStr, fs};
 
 use anyhow::{Context, Result, bail};
 use hinderdb::engine::{Database, ResultSet};
@@ -76,6 +76,7 @@ fn main() {
 
                 // Intercept file-per-database commands.
                 let upper_query = query.to_uppercase();
+
                 if upper_query.starts_with("CREATE DATABASE") {
                     if let Err(create_db_err) = handle_create_database(&base_dir, &upper_query) {
                         eprintln!("{}", create_db_err);
@@ -94,6 +95,14 @@ fn main() {
                             };
                         }
                         Err(use_db_err) => eprintln!("{}", use_db_err),
+                    }
+                    continue;
+                } else if upper_query.starts_with("SHOW DATABASES") {
+                    match handle_show_database(&base_dir) {
+                        Ok(list) => {
+                            print_lists(list);
+                        }
+                        Err(err) => eprintln!("{}", err),
                     }
                     continue;
                 }
@@ -134,10 +143,9 @@ fn ensure_base_dir() -> Result<String> {
 
 /// Builds the `.db` / `.wal` file paths for a given database name, rooted at `base_dir`.
 fn db_file_paths(base_dir: &str, name: &str) -> (String, String) {
-    (
-        format!("{}/{}.db", base_dir, name),
-        format!("{}/{}.wal", base_dir, name),
-    )
+    let db_path = format!("{}/{}.db", base_dir, name);
+    let wal_path = format!("{}/{}.wal", base_dir, name);
+    (db_path, wal_path)
 }
 
 /// Helper to instantiate a Database instance.
@@ -148,6 +156,39 @@ fn open_database(base_dir: &str, name: &str) -> Result<Database> {
         Ok(database) => Ok(database),
         Err(db_err) => bail!("Failed to boot database! Some luck you have :). {}", db_err),
     }
+}
+
+/// Helper to collect the list of database names.
+fn handle_show_database(base_dir: &str) -> Result<Vec<String>> {
+    let mut databases = Vec::new();
+    for entry in fs::read_dir(base_dir)? {
+        let path = entry?.path();
+        if path.is_file()
+            && path.extension() == Some(OsStr::new("db"))
+            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+        {
+            databases.push(stem.to_string());
+        }
+    }
+    Ok(databases)
+}
+
+/// Prints the formatted list provided.
+fn print_lists(list: Vec<String>) {
+    let Some(width) = list.iter().map(|item| item.len()).max() else {
+        println!("No elements in the list");
+        return;
+    };
+    let print_separator = || {
+        print!("+");
+        print!("{}+", "-".repeat(width + 2));
+        println!();
+    };
+    print_separator();
+    for item in list {
+        println!("| {:width$} |", item);
+    }
+    print_separator();
 }
 
 /// Intercepts and processes `CREATE DATABASE <name>`.
