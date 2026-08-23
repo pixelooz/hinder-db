@@ -144,7 +144,10 @@ fn db_file_paths(base_dir: &str, name: &str) -> (String, String) {
 fn open_database(base_dir: &str, name: &str) -> Result<Database> {
     let (db_path, wal_path) = db_file_paths(base_dir, name);
     // 1000 pages = ~8MB Buffer Pool cache.
-    Database::open(db_path, wal_path, 1000).context("Failed to boot database engine")
+    match Database::open(db_path, wal_path, 1000) {
+        Ok(database) => Ok(database),
+        Err(db_err) => bail!("Failed to boot database! Some luck you have :). {}", db_err),
+    }
 }
 
 /// Intercepts and processes `CREATE DATABASE <name>`.
