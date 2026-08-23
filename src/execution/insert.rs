@@ -67,7 +67,7 @@ impl Executor for InsertExecutor {
                 Err(Error::DuplicateKey(_)) => {
                     if index_meta.is_unique {
                         return Err(Error::ConstraintViolation(format!(
-                            "duplicate key value violates unique constraint on index: '{}'",
+                            "duplicate key value violates unique constraint on secondary_index: '{}'",
                             index_meta.index_name,
                         )));
                     }
