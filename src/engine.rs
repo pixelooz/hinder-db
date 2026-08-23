@@ -264,9 +264,8 @@ mod tests {
 
         let create_table_sql = "CREATE TABLE users (id INT, name VARCHAR(50), infinite_money BIGINT, is_broke BOOLEAN);";
 
-        let ResultSet::Mutation { rows_affected } = conn
-            .execute(create_table_sql)
-            .expect("CREATE TABLE failed")
+        let ResultSet::Mutation { rows_affected } =
+            conn.execute(create_table_sql).expect("CREATE TABLE failed")
         else {
             panic!("Expected Mutation result")
         };
@@ -282,9 +281,8 @@ mod tests {
         assert_eq!(rows_affected, 0, "DDL should return zero rows affected");
 
         let create_index_id = "CREATE INDEX idx_id ON users (id)";
-        let ResultSet::Mutation { rows_affected } = conn
-            .execute(create_index_id)
-            .expect("CREATE INDEX failed")
+        let ResultSet::Mutation { rows_affected } =
+            conn.execute(create_index_id).expect("CREATE INDEX failed")
         else {
             panic!("Expected Mutation result")
         };
@@ -300,9 +298,8 @@ mod tests {
         assert_eq!(rows_affected, 2);
 
         // Fetch the inserted rows to verify NULL padding
-        let ResultSet::Query { rows: insert_res, .. } = conn
-            .execute("SELECT * FROM users WHERE id <= 2;")
-            .unwrap()
+        let ResultSet::Query { rows: insert_res, .. } =
+            conn.execute("SELECT * FROM users WHERE id <= 2;").unwrap()
         else {
             panic!("Expected Query result")
         };
@@ -332,9 +329,7 @@ mod tests {
         // Fetch the newly inserted rows to verify direct insertion
         let ResultSet::Query {
             rows: insert_res2, ..
-        } = conn
-            .execute("SELECT * FROM users WHERE id > 2;")
-            .unwrap()
+        } = conn.execute("SELECT * FROM users WHERE id > 2;").unwrap()
         else {
             panic!("Expected Query result")
         };

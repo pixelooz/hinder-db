@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.104"
 parking_lot = {version = "0.12.5", features = ["arc_lock"]}
 rustyline = "18"
 thiserror = "2"

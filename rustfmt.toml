@@ -1,4 +1,3 @@
 edition = "2024"
 struct_lit_width = 20
 imports_granularity = "Module"
-chain_width = 50

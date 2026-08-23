@@ -139,9 +139,7 @@ impl<'a> Planner<'a> {
                         && let Constant(val) = &**right
                     {
                         let col_name = &schema.columns[col_idx].name;
-                        if let Some(meta) = indexes
-                            .values()
-                            .find(|im| im.column_name == *col_name)
+                        if let Some(meta) = indexes.values().find(|im| im.column_name == *col_name)
                         {
                             return Some((meta, *op, val.clone()));
                         }
@@ -161,9 +159,7 @@ impl<'a> Planner<'a> {
                             _ => unreachable!(),
                         };
                         let col_name = &schema.columns[col_idx].name;
-                        if let Some(meta) = indexes
-                            .values()
-                            .find(|im| im.column_name == *col_name)
+                        if let Some(meta) = indexes.values().find(|im| im.column_name == *col_name)
                         {
                             return Some((meta, opp_op, val.clone()));
                         }
