@@ -211,11 +211,9 @@ impl<'a> Planner<'a> {
                 op,
                 schema.clone(),
             ));
-            dbg!("built an index type on {}", search_key);
             return Ok(index_executor);
         }
         let iterator = BpTreeIterator::new(primary_root_id);
-        dbg!("built a sequential type");
         Ok(Box::new(SeqScanExecutor::new(iterator, schema.clone())))
     }
 
