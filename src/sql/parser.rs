@@ -101,6 +101,25 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses an entire SQL script containing multiple semicolon-separated statements.
+    /// Ignores empty statements (redundant semicolons).
+    pub fn parse_script(&mut self) -> Result<Vec<Statement>, Error> {
+        let mut statements = Vec::new();
+
+        while !self.check(&Token::Eof) {
+            // Consume trailing semicolons.
+            if self.match_token(&Token::Semicolon)? {
+                continue;
+            }
+            // Parse the actual statement.
+            statements.push(self.parse_statement()?);
+            // The semicolons are ignored for single statements so
+            // we consume it manually here.
+            self.match_token(&Token::Semicolon)?;
+        }
+        Ok(statements)
+    }
+
     /// The root of the AST tree. Routes to specific statement parser.
     pub fn parse_statement(&mut self) -> Result<Statement, Error> {
         match self.curr_token {

@@ -26,17 +26,20 @@ fn main() {
             return eprintln!("{}", db_err);
         }
     };
+    let mut conn = Some(db.connect());
 
     let history_path = format!("{}/{}", base_dir, HISTORY_FILE_NAME);
     let mut rl = DefaultEditor::new().expect("Failed to initialize rustyline");
     let _ = rl.load_history(&history_path);
     let mut query_buffer = String::new();
+
     loop {
         let prompt = if query_buffer.is_empty() {
             format!("hinder ({}) >> ", current_db)
         } else {
             "       ->".to_string()
         };
+
         let readline = rl.readline(&prompt);
         match readline {
             Ok(line) => {
@@ -44,6 +47,7 @@ fn main() {
                 if line.is_empty() {
                     continue;
                 }
+
                 // Handle meta commands.
                 if query_buffer.is_empty() && line.starts_with('.') {
                     match line.to_uppercase().as_str() {
@@ -68,12 +72,15 @@ fn main() {
                         }
                     }
                 }
+
                 query_buffer.push_str(line);
                 query_buffer.push(' ');
+
                 // Wait until the user terminates with a semicolon.
                 if !query_buffer.trim().ends_with(';') {
                     continue;
                 }
+
                 let query = query_buffer.trim().to_string();
                 let _ = rl.add_history_entry(query.as_str());
                 query_buffer.clear();
@@ -90,6 +97,7 @@ fn main() {
                     match handle_use_database(&base_dir, &upper_query) {
                         Ok(new_db) => {
                             drop(db);
+
                             current_db = new_db;
                             db = match open_database(&base_dir, &current_db) {
                                 Ok(db) => db,
@@ -97,6 +105,8 @@ fn main() {
                                     return eprintln!("{}", db_err);
                                 }
                             };
+                            // Re-establish the stateful session on the new database
+                            conn = Some(db.connect());
                         }
                         Err(use_db_err) => eprintln!("{}", use_db_err),
                     }
@@ -110,11 +120,19 @@ fn main() {
                     }
                     continue;
                 }
-                // Standard SQL execution routed to the core engine.
-                let conn = db.connect();
-                match conn.execute(&query) {
-                    Ok(result_set) => print_result_set(result_set),
-                    Err(exec_err) => eprintln!("Error: {:?}", exec_err),
+                let start = std::time::Instant::now();
+
+                // Safe to unwrap because we guarantee `conn` is `Some` unless we panicked during `USE`.
+                match conn.as_mut().unwrap().execute_batch(&query) {
+                    Ok(result_sets) => {
+                        for result_set in result_sets {
+                            print_result_set(result_set);
+                        }
+                        println!("({:.3} sec)", start.elapsed().as_secs_f64());
+                    }
+                    Err(exec_err) => {
+                        eprintln!("Error: {:?}", exec_err);
+                    }
                 }
             }
             Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => {

@@ -46,4 +46,7 @@ pub enum Error {
 
     #[error("requested table was not found: table_name={0}")]
     TableNotFound(String),
+
+    #[error("InvalidAction: {}", 0)]
+    ActionNotAllowed(String),
 }
