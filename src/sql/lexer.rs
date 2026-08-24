@@ -64,6 +64,10 @@ impl<'a> Lexer<'a> {
             "INDEX" => Token::Index,
             "UNIQUE" => Token::Unique,
             "ON" => Token::On,
+            "COMMIT" => Token::Commit,
+            "BEGIN" => Token::Begin,
+            "TRANSACTION" => Token::Transaction,
+            "ROLLBACK" => Token::Rollback,
 
             "OFFSET" => Token::Offset,
             "LIMIT" => Token::Limit,

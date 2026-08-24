@@ -10,6 +10,7 @@ use std::{
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
+    concurrency::lock_manager::LockManager,
     error::Error,
     execution::ExecutionContext,
     manager::CatalogManager,
@@ -96,8 +97,14 @@ impl<'a> Connection<'a> {
         let mut executor = query_plan.executor;
 
         let txn_id = self.db.next_txn_id.fetch_add(1, Ordering::SeqCst);
-        let mut ctx = ExecutionContext::new(&self.db.buffer_pool, &self.db.catalog, txn_id);
+        let lock_manager = LockManager::new();
 
+        let mut ctx = ExecutionContext::new(
+            &self.db.buffer_pool,
+            &self.db.catalog,
+            &lock_manager,
+            txn_id,
+        );
         let mut rows = Vec::new();
         let mut rows_affected = 0;
 

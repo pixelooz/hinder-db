@@ -11,6 +11,10 @@ pub enum Statement {
     Update(Update),
     Delete(Delete),
 
+    Commit,
+    Begin,
+    Rollback,
+
     CreateTable(CreateTable),
     CreateIndex(CreateIndex),
 

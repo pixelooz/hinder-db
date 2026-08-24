@@ -23,6 +23,10 @@ pub enum Token {
     Index,
     Unique,
     On,
+    Commit,
+    Begin,
+    Transaction,
+    Rollback,
 
     Count,
     Avg,

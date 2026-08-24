@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 mod catalog;
+mod concurrency;
 mod engine;
 mod error;
 mod execution;

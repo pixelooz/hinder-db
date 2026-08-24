@@ -108,27 +108,39 @@ impl<'a> Parser<'a> {
             Token::Insert => self.parse_insert().map(Statement::Insert),
             Token::Update => self.parse_update().map(Statement::Update),
             Token::Delete => self.parse_delete().map(Statement::Delete),
+            Token::Commit => {
+                self.advance()?; // Consume 'COMMIT'
+                self.match_token(&Token::Transaction)?;
+                Ok(Statement::Commit)
+            }
+            Token::Begin => {
+                self.advance()?;
+                self.match_token(&Token::Transaction)?;
+                Ok(Statement::Begin)
+            }
+            Token::Rollback => {
+                self.advance()?;
+                self.match_token(&Token::Transaction)?;
+                Ok(Statement::Rollback)
+            }
             Token::Create => {
-                self.advance()?; // Consume 'CREATE'
+                self.advance()?;
                 match self.curr_token {
                     Token::Table => {
-                        self.advance()?; // Consume 'TABLE'
-                        self.parse_create_table()
-                            .map(Statement::CreateTable)
+                        self.advance()?;
+                        self.parse_create_table().map(Statement::CreateTable)
                     }
                     Token::Unique => {
-                        self.advance()?; // Consume 'UNIQUE'
+                        self.advance()?;
                         self.consume(&Token::Index)?;
-                        self.parse_create_unique_index()
-                            .map(Statement::CreateIndex)
+                        self.parse_create_unique_index().map(Statement::CreateIndex)
                     }
                     Token::Index => {
-                        self.advance()?; // Consume 'INDEX'
-                        self.parse_create_index()
-                            .map(Statement::CreateIndex)
+                        self.advance()?;
+                        self.parse_create_index().map(Statement::CreateIndex)
                     }
                     Token::Database => {
-                        self.advance()?; // Consume 'DATABASE'
+                        self.advance()?;
                         let db_name = self.parse_identifier()?;
                         // CREATE DATABASE used as router after creation.
                         Ok(Statement::UseDatabase(db_name))

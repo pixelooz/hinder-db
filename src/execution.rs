@@ -17,7 +17,8 @@ pub(crate) mod value;
 use parking_lot::RwLock;
 
 use crate::{
-    error::Error, manager::CatalogManager, relation::tuple::Tuple, storage::buffer_pool::BufferPool,
+    concurrency::lock_manager::LockManager, error::Error, manager::CatalogManager,
+    relation::tuple::Tuple, storage::buffer_pool::BufferPool,
 };
 
 /// The runtime context that will be passed down the Volcano execution Tree.
@@ -29,6 +30,11 @@ pub struct ExecutionContext<'a> {
 
     /// A reference to the catalog for O(1) metadata lookups.
     pub catalog: &'a RwLock<CatalogManager>,
+
+    /// The concurrent table-access manager that provides read/write access
+    /// to executors ensuring no two write threads have access to a table at
+    /// the same time.
+    pub lock_manager: &'a LockManager,
 
     /// The unique transaction id grouping all operations in this query.
     ///
@@ -44,10 +50,16 @@ pub struct ExecutionContext<'a> {
 
 impl<'a> ExecutionContext<'a> {
     /// Initializes a new `ExecutionContext`.
-    pub fn new(pool: &'a BufferPool, catalog: &'a RwLock<CatalogManager>, txn_id: u64) -> Self {
+    pub fn new(
+        pool: &'a BufferPool,
+        catalog: &'a RwLock<CatalogManager>,
+        lock_manager: &'a LockManager,
+        txn_id: u64,
+    ) -> Self {
         Self {
             buffer_pool: pool,
             catalog,
+            lock_manager,
             block_buffer: Vec::with_capacity(2048),
             txn_id,
         }
