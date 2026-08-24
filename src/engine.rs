@@ -10,9 +10,9 @@ use std::{
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    catalog::manager::CatalogManager,
     error::Error,
     execution::ExecutionContext,
+    manager::CatalogManager,
     planner::Planner,
     relation::{schema::Schema, tuple::Tuple},
     sql::{lexer::Lexer, parser::Parser},

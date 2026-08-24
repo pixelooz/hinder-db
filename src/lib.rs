@@ -4,6 +4,7 @@ mod catalog;
 pub mod engine;
 pub mod error;
 mod execution;
+mod manager;
 mod planner;
 mod relation;
 mod sql;

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use crate::{
-    catalog::manager::{CatalogManager, IndexMeta},
     error::Error,
     execution::{
         Executor,
@@ -20,6 +19,7 @@ use crate::{
         update::{ExecAssignment, UpdateExecutor},
         value::ValuesExecutor,
     },
+    manager::{CatalogManager, IndexMeta},
     planner::bound_expr::BoundExpr,
     relation::{
         schema::{Column, Schema},

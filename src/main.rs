@@ -4,6 +4,7 @@ mod catalog;
 mod engine;
 mod error;
 mod execution;
+mod manager;
 mod planner;
 mod relation;
 mod sql;

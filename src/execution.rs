@@ -17,8 +17,7 @@ pub(crate) mod value;
 use parking_lot::RwLock;
 
 use crate::{
-    catalog::manager::CatalogManager, error::Error, relation::tuple::Tuple,
-    storage::buffer_pool::BufferPool,
+    error::Error, manager::CatalogManager, relation::tuple::Tuple, storage::buffer_pool::BufferPool,
 };
 
 /// The runtime context that will be passed down the Volcano execution Tree.
