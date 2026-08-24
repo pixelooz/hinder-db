@@ -205,4 +205,3 @@ impl<'a> Connection<'a> {
         Ok(ResultSet::Mutation { rows_affected: 0 })
     }
 }
-
