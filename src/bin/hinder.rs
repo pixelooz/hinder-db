@@ -150,7 +150,7 @@ fn main() {
                     }
                     continue;
                 } else if upper_query.starts_with("SHOW DATABASES")
-                    || upper_query.starts_with(".databases")
+                    || upper_query.starts_with(".DATABASES")
                 {
                     match handle_show_database(&base_dir) {
                         Ok(list) => {
