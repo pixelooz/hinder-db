@@ -1,13 +1,41 @@
 use std::{env, ffi::OsStr, fs};
 
 use anyhow::{Context, Result, bail};
+use clap::{Parser, Subcommand};
 use hinderdb::engine::{Database, ResultSet};
 use rustyline::{DefaultEditor, error::ReadlineError};
 
 const DEFAULT_DB_NAME: &str = "hinderdb_default";
 const HISTORY_FILE_NAME: &str = ".hinderdb_history";
 
+#[derive(Parser)]
+#[command(name = "hinder", about = "A small yet powerful database.")]
+struct Cli {
+    #[arg(short, long, default_value = "$HOME/.hinder_db/")]
+    data_dir: String,
+
+    #[command(subcommand)]
+    commands: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Show commands for database usage pattern and general help.
+    DbHelp,
+    /// Starts the database engine CLI repl.
+    Repl,
+    /// Show all the databases.
+    Show,
+    /// Starts the database repl with the provided database.
+    Use {
+        /// Name of the database the repl should be initialized with.
+        db_name: String,
+    },
+}
+
 fn main() {
+    let cli = Cli::parse();
+
     println!("Welcome to hinderdb monitor.");
     println!("Commands ends with ;");
     println!("Type .help for instructions, .exit to quit.\n");
@@ -15,11 +43,31 @@ fn main() {
     let base_dir = match ensure_base_dir() {
         Ok(dir) => dir,
         Err(dir_err) => {
-            return eprintln!("couldn't set up '.hinder_db' directory: {}", dir_err);
+            eprintln!("couldn't set up '.hinder_db' directory: {}", dir_err);
+            return;
         }
     };
-
     let mut current_db = DEFAULT_DB_NAME.to_string();
+
+    match cli.commands {
+        Commands::Show => {
+            match handle_show_database(&base_dir) {
+                Ok(list) => {
+                    print_lists(list);
+                }
+                Err(err) => eprintln!("{}", err),
+            }
+            return;
+        }
+        Commands::Repl => {}
+        Commands::Use { db_name } => {
+            current_db = db_name;
+        }
+        Commands::DbHelp => {
+            show_help();
+            return;
+        }
+    }
     let mut db = match open_database(&base_dir, &current_db) {
         Ok(db) => db,
         Err(db_err) => {
@@ -53,17 +101,7 @@ fn main() {
                     match line.to_uppercase().as_str() {
                         ".EXIT" | ".QUIT" => break,
                         ".HELP" => {
-                            println!("Meta Commands:");
-                            println!("To Exit the REPL   : .exit / .quit");
-                            println!("Show this message  : .help");
-                            println!();
-                            println!("SQL Commands:");
-                            println!("CREATE DATABASE <name>;");
-                            println!("USE <db_name>;");
-                            println!("SHOW DATABASES;");
-                            println!();
-                            println!("Inside a database instance:");
-                            println!(" >> Standard SQL commands...");
+                            show_help();
                             continue;
                         }
                         _ => {
@@ -111,7 +149,9 @@ fn main() {
                         Err(use_db_err) => eprintln!("{}", use_db_err),
                     }
                     continue;
-                } else if upper_query.starts_with("SHOW DATABASES") {
+                } else if upper_query.starts_with("SHOW DATABASES")
+                    || upper_query.starts_with(".databases")
+                {
                     match handle_show_database(&base_dir) {
                         Ok(list) => {
                             print_lists(list);
@@ -146,6 +186,21 @@ fn main() {
     }
     let _ = rl.save_history(&history_path);
     println!("see you again!");
+}
+
+/// Shows helpful commands and usage patterns.
+fn show_help() {
+    println!("Meta Commands:");
+    println!("To Exit the REPL   : .exit / .quit");
+    println!("Show this message  : .help");
+    println!();
+    println!("SQL Commands:");
+    println!("CREATE DATABASE <name>;");
+    println!("USE <db_name>;");
+    println!("SHOW DATABASES;");
+    println!();
+    println!("Inside a database instance:");
+    println!(" >> Standard SQL commands...");
 }
 
 /// Resolves the base '.hinder_db' directory — inside the user's home

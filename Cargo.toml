@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
 parking_lot = {version = "0.12.5", features = ["arc_lock"]}
 rustyline = "18"
 thiserror = "2"
