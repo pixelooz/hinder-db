@@ -105,53 +105,56 @@ impl HashAggregateExecutor {
 impl Executor for HashAggregateExecutor {
     fn next(&mut self, ctx: &mut ExecutionContext) -> Result<Option<Tuple>, Error> {
         if let Some(iterator) = &mut self.output_iter {
-            Ok(iterator.next())
-        } else {
-            let mut groups = HashMap::new();
-            let mut had_input = false;
+            return Ok(iterator.next());
+        }
 
-            while let Some(tuple) = self.child.next(ctx)? {
-                // Extract the grouping key/s
-                let group_key: Vec<Value> = self
-                    .gb_indices
-                    .iter()
-                    .map(|&i| tuple.values[i].clone())
-                    .collect();
+        let mut groups: HashMap<Vec<Value>, Vec<AggregateState>> = HashMap::new();
+        let mut had_input = false;
 
-                // Initialize the aggregate state.
-                let states = groups.entry(group_key).or_insert_with(|| {
-                    self.aggr_funcs
-                        .iter()
-                        .map(|f| f.initial_state())
-                        .collect::<Vec<AggregateState>>()
-                });
-                had_input = true;
-                // Update the running total.
-                for (i, aggr_func) in self.aggr_funcs.iter().enumerate() {
-                    aggr_func.accumulate(&mut states[i], &tuple)?;
-                }
-            }
-            // Edge case: global aggregate on an empty table yields 1 row with
-            // default states.
-            if !had_input && self.gb_indices.is_empty() {
-                let default_states: Vec<AggregateState> = self
-                    .aggr_funcs
+        while let Some(tuple) = self.child.next(ctx)? {
+            // Extract the grouping key/s
+            let group_key: Vec<Value> = self
+                .gb_indices
+                .iter()
+                .map(|&i| tuple.values[i].clone())
+                .collect();
+
+            let initialize_aggr_state = || {
+                self.aggr_funcs
                     .iter()
                     .map(|f| f.initial_state())
-                    .collect();
-                groups.insert(vec![], default_states);
-            }
-            let mut results = Vec::with_capacity(groups.len());
+                    .collect::<Vec<AggregateState>>()
+            };
+            // Initialize the aggregate state.
+            let states = groups
+                .entry(group_key)
+                .or_insert_with(initialize_aggr_state);
 
-            for (mut key, states) in groups {
-                for state in states {
-                    key.push(state.finalize());
-                }
-                results.push(Tuple::new(key));
-            }
-            let iterator = self.output_iter.insert(results.into_iter());
-            Ok(iterator.next())
+            had_input = true;
+
+            // Update the running total.
+            self.aggr_funcs
+                .iter()
+                .enumerate()
+                .try_for_each(|(i, aggr_func)| aggr_func.accumulate(&mut states[i], &tuple))?;
         }
+        // Edge case: global aggregate on an empty table yields 1 row with
+        // default states.
+        if !had_input && self.gb_indices.is_empty() {
+            let default_states: Vec<AggregateState> =
+                self.aggr_funcs.iter().map(|f| f.initial_state()).collect();
+            groups.insert(vec![], default_states);
+        }
+        let mut results = Vec::with_capacity(groups.len());
+
+        for (mut key, states) in groups {
+            for state in states {
+                key.push(state.finalize());
+            }
+            results.push(Tuple::new(key));
+        }
+        let iterator = self.output_iter.insert(results.into_iter());
+        Ok(iterator.next())
     }
 
     fn reset(&mut self) -> Result<(), Error> {
