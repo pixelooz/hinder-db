@@ -95,10 +95,19 @@ fn main() {
                 if line.is_empty() {
                     continue;
                 }
-
                 // Handle meta commands.
                 if query_buffer.is_empty() && line.starts_with('.') {
                     match line.to_uppercase().as_str() {
+                        ".DATABASES" => match handle_show_database(&base_dir) {
+                            Ok(list) => {
+                                print_lists(list);
+                                continue;
+                            }
+                            Err(err) => {
+                                eprintln!("Error showing databases: {}", err);
+                                continue;
+                            }
+                        },
                         ".EXIT" | ".QUIT" => break,
                         ".HELP" => {
                             show_help();
@@ -110,7 +119,6 @@ fn main() {
                         }
                     }
                 }
-
                 query_buffer.push_str(line);
                 query_buffer.push(' ');
 
@@ -118,13 +126,16 @@ fn main() {
                 if !query_buffer.trim().ends_with(';') {
                     continue;
                 }
-
                 let query = query_buffer.trim().to_string();
                 let _ = rl.add_history_entry(query.as_str());
                 query_buffer.clear();
 
+                dbg!(&query);
+
                 // Intercept file-per-database commands.
                 let upper_query = query.to_uppercase();
+
+                dbg!(&upper_query);
 
                 if upper_query.starts_with("CREATE DATABASE") {
                     if let Err(create_db_err) = handle_create_database(&base_dir, &upper_query) {
@@ -149,16 +160,17 @@ fn main() {
                         Err(use_db_err) => eprintln!("{}", use_db_err),
                     }
                     continue;
-                } else if upper_query.starts_with("SHOW DATABASES")
-                    || upper_query.starts_with(".DATABASES")
-                {
-                    match handle_show_database(&base_dir) {
-                        Ok(list) => {
-                            print_lists(list);
+                } else {
+                    let upper_query = upper_query.trim_end_matches(';').trim();
+                    if matches!(upper_query, "SHOW DATABASES") {
+                        match handle_show_database(&base_dir) {
+                            Ok(list) => {
+                                print_lists(list);
+                            }
+                            Err(err) => eprintln!("{}", err),
                         }
-                        Err(err) => eprintln!("{}", err),
+                        continue;
                     }
-                    continue;
                 }
                 let start = std::time::Instant::now();
 
