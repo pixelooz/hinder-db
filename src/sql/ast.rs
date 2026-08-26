@@ -20,6 +20,9 @@ pub enum Statement {
 
     ShowDatabases,
     UseDatabase(String),
+
+    DropTable(String),
+    ShowTables,
 }
 
 /// Components of a SELECT statement and its derivatives.
@@ -78,6 +81,7 @@ pub struct ColumnDefinition {
     pub data_type: DataType,
     /// Currently used for VARCHAR(n), n being the length.
     pub length: Option<u32>,
+    pub is_primary_key: bool,
 }
 
 /// Components of a CREATE INDEX statement.

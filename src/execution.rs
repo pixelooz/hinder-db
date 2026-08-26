@@ -1,6 +1,7 @@
 pub(crate) mod aggregate;
 pub(crate) mod create;
 pub(crate) mod delete;
+pub(crate) mod drop;
 pub(crate) mod emit;
 pub(crate) mod evaluator;
 pub(crate) mod filter;
@@ -10,6 +11,7 @@ pub(crate) mod iterator;
 pub(crate) mod join;
 pub(crate) mod limit;
 pub(crate) mod seq_scan;
+pub(crate) mod show;
 pub(crate) mod sort;
 pub(crate) mod update;
 pub(crate) mod value;

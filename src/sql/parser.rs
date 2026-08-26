@@ -170,6 +170,12 @@ impl<'a> Parser<'a> {
                     ))),
                 }
             }
+            Token::Drop => {
+                self.advance()?;
+                self.consume(&Token::Table)?;
+                let table_name = self.parse_identifier()?;
+                Ok(Statement::DropTable(table_name))
+            }
             Token::Use => {
                 self.advance()?;
                 let db_name = self.parse_identifier()?;
@@ -177,8 +183,13 @@ impl<'a> Parser<'a> {
             }
             Token::Show => {
                 self.advance()?;
-                self.consume(&Token::Databases)?;
-                Ok(Statement::ShowDatabases)
+                if self.consume(&Token::Tables).is_err() {
+                    return Err(Error::SyntaxErr(format!(
+                        "expected TABLES or DATABASES after SHOW, found {:?}",
+                        self.curr_token,
+                    )));
+                }
+                Ok(Statement::ShowTables)
             }
             _ => Err(Error::SyntaxErr(format!(
                 "unexpected token at start of statement: {:?}",
@@ -731,10 +742,17 @@ impl<'a> Parser<'a> {
                 )));
             }
         };
+        let mut is_primary_key = false;
+
+        if self.match_token(&Token::Primary)? {
+            self.consume(&Token::Key)?;
+            is_primary_key = true;
+        }
         Ok(ColumnDefinition {
             name: col_name,
             data_type,
             length,
+            is_primary_key,
         })
     }
 

@@ -130,12 +130,8 @@ fn main() {
                 let _ = rl.add_history_entry(query.as_str());
                 query_buffer.clear();
 
-                dbg!(&query);
-
                 // Intercept file-per-database commands.
                 let upper_query = query.to_uppercase();
-
-                dbg!(&upper_query);
 
                 if upper_query.starts_with("CREATE DATABASE") {
                     if let Err(create_db_err) = handle_create_database(&base_dir, &upper_query) {
@@ -145,8 +141,6 @@ fn main() {
                 } else if upper_query.starts_with("USE") {
                     match handle_use_database(&base_dir, &upper_query) {
                         Ok(new_db) => {
-                            drop(db);
-
                             current_db = new_db;
                             db = match open_database(&base_dir, &current_db) {
                                 Ok(db) => db,
@@ -158,6 +152,30 @@ fn main() {
                             conn = Some(db.connect());
                         }
                         Err(use_db_err) => eprintln!("{}", use_db_err),
+                    }
+                    continue;
+                } else if upper_query.starts_with("DROP DATABASE") {
+                    let is_curr_db = match handle_drop_database(&base_dir, &query, &current_db) {
+                        Ok(is_curr) => is_curr,
+                        Err(err) => return eprintln!("{}", err),
+                    };
+                    if is_curr_db {
+                        println!(
+                            "Current Database {} dropped, switching to default",
+                            current_db
+                        );
+                        current_db = DEFAULT_DB_NAME.to_string();
+                        db = match open_database(&base_dir, &current_db) {
+                            Ok(new_db) => new_db,
+                            Err(err) => return eprintln!("{}", err),
+                        };
+                        conn = Some(db.connect());
+                    } else {
+                        let parts: Vec<&str> = upper_query
+                            .trim_end_matches(';')
+                            .split_whitespace()
+                            .collect();
+                        println!("Database {} dropped successfully", parts[2]);
                     }
                     continue;
                 } else {
@@ -203,8 +221,9 @@ fn main() {
 /// Shows helpful commands and usage patterns.
 fn show_help() {
     println!("Meta Commands:");
-    println!("To Exit the REPL   : .exit / .quit");
-    println!("Show this message  : .help");
+    println!("To Exit the REPL        : .exit / .quit");
+    println!("Show this message       : .help");
+    println!("List all the databases  : .databases");
     println!();
     println!("SQL Commands:");
     println!("CREATE DATABASE <name>;");
@@ -312,6 +331,23 @@ fn handle_use_database(base_dir: &str, query: &str) -> Result<String> {
     }
     println!("Switched to database '{}'.", db_name);
     Ok(db_name.to_string())
+}
+
+/// Drops the database by deleting the file from the database directory. Also removing
+/// the wal file in the process.
+fn handle_drop_database(base_dir: &str, query: &str, current_db: &str) -> Result<bool> {
+    let parts: Vec<&str> = query.trim_end_matches(';').split_whitespace().collect();
+
+    if parts.len() != 3 {
+        bail!("Syntax Error: Expected DROP DATABASE <name>");
+    }
+    let target_db = parts[2];
+    let (db_path, wal_path) = db_file_paths(base_dir, target_db);
+
+    fs::remove_file(db_path)?;
+    fs::remove_file(wal_path)?;
+
+    Ok(target_db == current_db)
 }
 
 /// Dynamically formats and prints the ResultSet as an ASCII table.

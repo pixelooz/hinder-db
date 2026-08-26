@@ -172,6 +172,7 @@ impl<'a> BpTree<'a> {
                 _ => break,
             }
         }
+        self.buffer_pool.begin_page_mutation(curr_page_id, txn_id)?;
         let leaf_frame = self.buffer_pool.fetch_page(curr_page_id)?;
         let mut node_guard = leaf_frame.write();
         let BTreeNode::Leaf(leaf) = &mut *node_guard else {
@@ -228,8 +229,7 @@ impl<'a> BpTree<'a> {
         let is_leaf = matches!(&*root_guard, BTreeNode::Leaf(_));
 
         let (left_page_id, left_child_frame) = self.buffer_pool.new_page(is_leaf)?;
-        self.buffer_pool
-            .begin_page_mutation(left_page_id, txn_id)?;
+        self.buffer_pool.begin_page_mutation(left_page_id, txn_id)?;
 
         let mut left_child_guard = left_child_frame.write();
         // Copy the old root's exact state into the new left page.
@@ -292,8 +292,7 @@ impl<'a> BpTree<'a> {
         child_page_id: PageId,
         txn_id: u64,
     ) -> Result<Option<SplitResult>, Error> {
-        self.buffer_pool
-            .begin_page_mutation(parent_id, txn_id)?;
+        self.buffer_pool.begin_page_mutation(parent_id, txn_id)?;
 
         let parent_frame = self.buffer_pool.fetch_page(parent_id)?;
         let mut node_guard = parent_frame.write();
@@ -373,8 +372,7 @@ impl<'a> BpTree<'a> {
         payload: Vec<u8>,
         txn_id: u64,
     ) -> Result<Option<SplitResult>, Error> {
-        self.buffer_pool
-            .begin_page_mutation(leaf_page_id, txn_id)?;
+        self.buffer_pool.begin_page_mutation(leaf_page_id, txn_id)?;
 
         let leaf_frame = self.buffer_pool.fetch_page(leaf_page_id)?;
         let mut node_guard = leaf_frame.write();
@@ -397,10 +395,7 @@ impl<'a> BpTree<'a> {
                 // Trying compaction before splitting. There might be number of tombstones
                 // so we attempt to remove them.
                 left_leaf.compact();
-                if left_leaf
-                    .insert_record(row_id, payload.clone())
-                    .is_ok()
-                {
+                if left_leaf.insert_record(row_id, payload.clone()).is_ok() {
                     left_leaf.mark_dirty();
                     return Ok(None);
                 }
@@ -443,8 +438,7 @@ impl<'a> BpTree<'a> {
         // If an old right sibling existed, fetch it and connects its backward
         // pointer.
         if old_has_next {
-            self.buffer_pool
-                .begin_page_mutation(old_next_id, txn_id)?;
+            self.buffer_pool.begin_page_mutation(old_next_id, txn_id)?;
 
             let old_right_frame = self.buffer_pool.fetch_page(old_next_id)?;
             let mut old_right_guard = old_right_frame.write();
@@ -495,8 +489,7 @@ impl<'a> BpTree<'a> {
                 _ => break,
             }
         }
-        self.buffer_pool
-            .begin_page_mutation(curr_page_id, txn_id)?;
+        self.buffer_pool.begin_page_mutation(curr_page_id, txn_id)?;
 
         let leaf_frame = self.buffer_pool.fetch_page(curr_page_id)?;
         let mut leaf_guard = leaf_frame.write();
@@ -549,14 +542,10 @@ mod tests {
         let (root_id, _) = pool.new_page(true).unwrap();
         let btree = BpTree::new(&mut pool, root_id);
 
-        let result = btree
-            .insert_leaf(root_id, 100, vec![1, 2, 3], 10)
-            .unwrap();
+        let result = btree.insert_leaf(root_id, 100, vec![1, 2, 3], 10).unwrap();
         assert!(result.is_none());
 
-        let result = btree
-            .insert_leaf(root_id, 101, vec![4, 5, 6], 11)
-            .unwrap();
+        let result = btree.insert_leaf(root_id, 101, vec![4, 5, 6], 11).unwrap();
         assert!(result.is_none());
 
         assert_eq!(btree.find_record(100).unwrap(), Some(vec![1, 2, 3]));
@@ -635,9 +624,7 @@ mod tests {
         let large_payload = vec![42u8; 400];
 
         for key in 1..=500 {
-            btree
-                .insert(key, large_payload.clone(), key)
-                .unwrap();
+            btree.insert(key, large_payload.clone(), key).unwrap();
         }
         // Here we verify if root pinning actually works in our case or not given hundreds
         //  of splits.

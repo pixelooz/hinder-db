@@ -52,33 +52,23 @@ impl Tuple {
             let value = &self.values[i];
             let is_null = matches!(value, Value::Null);
 
-            writer
-                .write_all(&[is_null as u8])
-                .map_err(Error::Io)?;
+            writer.write_all(&[is_null as u8]).map_err(Error::Io)?;
 
             if !is_null {
                 match (col.data_type, value) {
                     (DataType::BigInt, Value::BigInt(v)) => {
-                        writer
-                            .write_all(&v.to_le_bytes())
-                            .map_err(Error::Io)?;
+                        writer.write_all(&v.to_le_bytes()).map_err(Error::Io)?;
                     }
                     (DataType::Int, Value::Int(v)) => {
-                        writer
-                            .write_all(&v.to_le_bytes())
-                            .map_err(Error::Io)?;
+                        writer.write_all(&v.to_le_bytes()).map_err(Error::Io)?;
                     }
                     (DataType::Boolean, Value::Boolean(v)) => {
                         writer.write_all(&[*v as u8]).map_err(Error::Io)?;
                     }
                     (DataType::Varchar, Value::Varchar(v)) => {
                         let length = v.len() as u32;
-                        writer
-                            .write_all(&length.to_le_bytes())
-                            .map_err(Error::Io)?;
-                        writer
-                            .write_all(v.as_bytes())
-                            .map_err(Error::Io)?;
+                        writer.write_all(&length.to_le_bytes()).map_err(Error::Io)?;
+                        writer.write_all(v.as_bytes()).map_err(Error::Io)?;
                     }
                     _ => {
                         return Err(Error::CorruptPage(format!(
@@ -99,49 +89,37 @@ impl Tuple {
         let mut is_null = [0u8; 1];
 
         for col in &schema.columns {
-            reader
-                .read_exact(&mut is_null)
-                .map_err(Error::Io)?;
+            reader.read_exact(&mut is_null).map_err(Error::Io)?;
 
             if is_null[0] == 0 {
                 let value = match col.data_type {
                     DataType::BigInt => {
                         let mut buffer = [0u8; 8];
 
-                        reader
-                            .read_exact(&mut buffer)
-                            .map_err(Error::Io)?;
+                        reader.read_exact(&mut buffer).map_err(Error::Io)?;
                         Value::BigInt(i64::from_le_bytes(buffer))
                     }
                     DataType::Int => {
                         let mut buffer = [0u8; 4];
 
-                        reader
-                            .read_exact(&mut buffer)
-                            .map_err(Error::Io)?;
+                        reader.read_exact(&mut buffer).map_err(Error::Io)?;
                         Value::Int(i32::from_le_bytes(buffer))
                     }
                     DataType::Boolean => {
                         let mut buffer = [0u8; 1];
 
-                        reader
-                            .read_exact(&mut buffer)
-                            .map_err(Error::Io)?;
+                        reader.read_exact(&mut buffer).map_err(Error::Io)?;
 
                         Value::Boolean(buffer[0] == 1)
                     }
                     DataType::Varchar => {
                         let mut len_buf = [0u8; 4];
-                        reader
-                            .read_exact(&mut len_buf)
-                            .map_err(Error::Io)?;
+                        reader.read_exact(&mut len_buf).map_err(Error::Io)?;
 
                         let str_len = u32::from_le_bytes(len_buf) as usize;
                         let mut buffer = vec![0u8; str_len];
 
-                        reader
-                            .read_exact(&mut buffer)
-                            .map_err(Error::Io)?;
+                        reader.read_exact(&mut buffer).map_err(Error::Io)?;
 
                         let parsed_str = String::from_utf8(buffer)
                             .map_err(|err| Error::CorruptPage(format!("invalid utf-8: {}", err)))?;
@@ -175,8 +153,9 @@ mod tests {
         Schema {
             columns: types
                 .into_iter()
-                .map(|x| Column::new(None, x.0, x.1, x.2))
+                .map(|x| Column::new(None, x.0, x.1, x.2, false))
                 .collect(),
+            primary_key_idx: None,
         }
     }
 

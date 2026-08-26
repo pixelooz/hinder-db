@@ -16,10 +16,12 @@ pub enum Token {
     Or,
     Create,
     Table,
+    Tables,
     Database,
     Databases,
     Use,
     Show,
+    Drop,
     Index,
     Unique,
     On,
@@ -45,6 +47,9 @@ pub enum Token {
     Left,
     Right,
     Join,
+
+    Primary,
+    Key,
 
     // Data Type
     BigIntType,

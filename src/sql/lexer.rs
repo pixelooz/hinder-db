@@ -84,12 +84,19 @@ impl<'a> Lexer<'a> {
             "RIGHT" => Token::Right,
             "JOIN" => Token::Join,
 
-            "USE" => Token::Use,
+            "TABLES" => Token::Tables,
             "SHOW" => Token::Show,
+            "USE" => Token::Use,
+            "DROP" => Token::Drop,
+
+            "PRIMARY" => Token::Primary,
+            "KEY" => Token::Key,
+
+            "BIGINT" => Token::BigIntType,
             "INT" => Token::IntType,
             "VARCHAR" => Token::VarcharType,
             "BOOLEAN" => Token::BooleanType,
-            "BIGINT" => Token::BigIntType,
+
             "TRUE" => Token::BoolLit(true),
             "FALSE" => Token::BoolLit(false),
             _ => Token::Ident(ident),

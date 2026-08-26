@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::{
     error::Error,
     execution::{
@@ -7,6 +5,7 @@ use crate::{
         aggregate::{AggregateFunc, HashAggregateExecutor},
         create::{CreateExecutor, CreateOperation},
         delete::DeleteExecutor,
+        drop::DropTableExecutor,
         emit::EmitExecutor,
         filter::FilterExecutor,
         index::{IndexScanExecutor, IndexType},
@@ -15,11 +14,12 @@ use crate::{
         join::BlockNestedLoopJoinExecutor,
         limit::LimitOffsetExecutor,
         seq_scan::SeqScanExecutor,
+        show::ShowTablesExecutor,
         sort::SortExecutor,
         update::{ExecAssignment, UpdateExecutor},
         value::ValuesExecutor,
     },
-    manager::{CatalogManager, IndexMeta},
+    manager::CatalogManager,
     planner::bound_expr::BoundExpr,
     relation::{
         schema::{Column, Schema},
@@ -72,7 +72,20 @@ impl<'a> Planner<'a> {
             Insert(stmt) => self.plan_insert(stmt),
             Delete(stmt) => self.plan_delete(stmt),
             Update(stmt) => self.plan_update(stmt),
-
+            DropTable(table_name) => Ok(QueryPlan {
+                executor: Box::new(DropTableExecutor::new(table_name)),
+                schema: Schema::new(vec![]),
+                is_query: false,
+            }),
+            ShowTables => {
+                let column = Column::new(None, "table_name", DataType::Varchar, None, false);
+                let schema = Schema::new(vec![column]);
+                Ok(QueryPlan {
+                    executor: Box::new(ShowTablesExecutor::new()),
+                    schema,
+                    is_query: true,
+                })
+            }
             _ => Err(Error::NotImplementedYet(
                 "only select statements are currently supported by the planner".into(),
             )),
@@ -83,16 +96,27 @@ impl<'a> Planner<'a> {
     /// the `CreateExecutor`
     fn plan_create_table(&self, stmt: CreateTable) -> Result<QueryPlan, Error> {
         let mut columns = Vec::with_capacity(stmt.columns.len());
+
+        for col_def in &stmt.columns {
+            if col_def.is_primary_key
+                && !matches!(col_def.data_type, DataType::BigInt | DataType::Int)
+            {
+                return Err(Error::SyntaxErr(format!(
+                    "PRIMARY KEY must be INT or BIGINT. found: {:?}",
+                    col_def.data_type
+                )));
+            }
+        }
         for col_def in stmt.columns {
             columns.push(Column::new(
                 None,
                 col_def.name,
                 col_def.data_type,
                 col_def.length,
+                col_def.is_primary_key,
             ));
         }
         let schema = Schema::new(columns);
-
         let operation = CreateOperation::Table {
             table_name: stmt.table_name,
             schema,
@@ -121,55 +145,47 @@ impl<'a> Planner<'a> {
         Ok(query_plan)
     }
 
-    /// Analyses a bound predicate to find an exact-match condition on an indexed column.
-    fn find_indexable_condition<'b>(
-        &self,
-        bound_expr: &BoundExpr,
-        schema: &Schema,
-        indexes: &'b HashMap<String, IndexMeta>,
-    ) -> Option<(&'b IndexMeta, BinaryOperator, Value)> {
-        use BinaryOperator::*;
-        use BoundExpr::*;
-
+    /// Analyzes the given `bound_expr` to extract an exact-match or range condition.
+    /// Returns the physical column index, the operator, and the comparison value.
+    fn extract_predicate(&self, bound_expr: &BoundExpr) -> Option<(usize, BinaryOperator, Value)> {
         match bound_expr {
-            BinaryOp { left, op, right } => {
-                if matches!(op, Eq | Gt | Gte | Lt | Lte) {
+            BoundExpr::BinaryOp { left, op, right } => {
+                if matches!(
+                    op,
+                    BinaryOperator::Eq
+                        | BinaryOperator::Gt
+                        | BinaryOperator::Gte
+                        | BinaryOperator::Lt
+                        | BinaryOperator::Lte
+                ) {
                     // Case 1: [Column Op Constant] (WHERE age >= 20)
-                    if let ColumnRef { col_idx, .. } = **left
-                        && let Constant(val) = &**right
+                    if let BoundExpr::ColumnRef { col_idx, .. } = **left
+                        && let BoundExpr::Constant(val) = &**right
                     {
-                        let col_name = &schema.columns[col_idx].name;
-                        if let Some(meta) = indexes.values().find(|im| im.column_name == *col_name)
-                        {
-                            return Some((meta, *op, val.clone()));
-                        }
+                        return Some((col_idx, *op, val.clone()));
                     }
                     // Case 2: [Constant Op Column] (WHERE 20 <= age)
-                    if let ColumnRef { col_idx, .. } = **right
-                        && let Constant(val) = &**left
+                    if let BoundExpr::ColumnRef { col_idx, .. } = **right
+                        && let BoundExpr::Constant(val) = &**left
                     {
                         // Flip the operator. (20 <= age) -> (age >= 20)
                         let opp_op = match op {
-                            Eq => Eq,
-                            Neq => Neq,
-                            Gt => Lt,
-                            Gte => Lte,
-                            Lt => Gt,
-                            Lte => Gte,
+                            BinaryOperator::Eq => BinaryOperator::Eq,
+                            BinaryOperator::Neq => BinaryOperator::Neq,
+                            BinaryOperator::Gt => BinaryOperator::Lt,
+                            BinaryOperator::Gte => BinaryOperator::Lte,
+                            BinaryOperator::Lt => BinaryOperator::Gt,
+                            BinaryOperator::Lte => BinaryOperator::Gte,
                             _ => unreachable!(),
                         };
-                        let col_name = &schema.columns[col_idx].name;
-                        if let Some(meta) = indexes.values().find(|im| im.column_name == *col_name)
-                        {
-                            return Some((meta, opp_op, val.clone()));
-                        }
+                        return Some((col_idx, opp_op, val.clone()));
                     }
                 }
                 // If it wasn't a valid condition, checking if its an And condition
-                if *op == And {
+                if *op == BinaryOperator::And {
                     return self
-                        .find_indexable_condition(left, schema, indexes)
-                        .or_else(|| self.find_indexable_condition(right, schema, indexes));
+                        .extract_predicate(left)
+                        .or_else(|| self.extract_predicate(right));
                 }
                 None
             }
@@ -189,29 +205,55 @@ impl<'a> Planner<'a> {
     ) -> Result<Box<dyn Executor>, Error> {
         let primary_root_id = self.catalog.get_table_root(table_name)?;
 
-        // Attempt to use an Index scan if where clause is present.
-        // Look for an exact match predicate on an indexed column.
+        // Attempt to use an Index scan if where clause is present. Look for an exact
+        // match predicate on an indexed column.
         if let Some(predicate) = bound_predicate
-            && let Some(indexes) = self.catalog.get_table_indexes(table_name)
-            && let Some((index_meta, op, value)) =
-                self.find_indexable_condition(predicate, schema, indexes)
+            && let Some((col_idx, op, value)) = self.extract_predicate(predicate)
         {
-            let search_key = value.to_index_key();
+            let search_key = match value {
+                Value::BigInt(val) => val as u64,
+                Value::Int(val) => val as u64,
+                _ => {
+                    return Err(Error::SyntaxErr(format!(
+                        "PRIMARY KEY must be INT or BIGINT, found: {:?}",
+                        value
+                    )));
+                }
+            };
             let start_key = match op {
                 BinaryOperator::Eq | BinaryOperator::Gt | BinaryOperator::Gte => Some(search_key),
                 BinaryOperator::Lt | BinaryOperator::Lte => None, // Start at the leftmost leaf.
                 _ => unreachable!("OR and AND should not have been encountered."),
             };
-            let scan_type = IndexType::Secondary { primary_root_id };
-            let iterator = BpTreeIterator::new_at_key(index_meta.root_page_id, start_key);
-            let index_executor = Box::new(IndexScanExecutor::new(
-                iterator,
-                scan_type,
-                search_key,
-                op,
-                schema.clone(),
-            ));
-            return Ok(index_executor);
+            // Check if the predicate (where clause) targets the primary_key.
+            if Some(col_idx) == schema.primary_key_idx {
+                let scan_type = IndexType::Primary;
+                let iterator = BpTreeIterator::new_at_key(primary_root_id, start_key);
+                let index_executor = Box::new(IndexScanExecutor::new(
+                    iterator,
+                    scan_type,
+                    search_key,
+                    op,
+                    schema.clone(),
+                ));
+                return Ok(index_executor);
+            }
+            let col_name = &schema.columns[col_idx].name;
+            let search_key = value.to_index_key();
+            if let Some(indexes) = self.catalog.table_indexes(table_name)
+                && let Some(meta) = indexes.values().find(|im| im.column_name == *col_name)
+            {
+                let scan_type = IndexType::Secondary { primary_root_id };
+                let iterator = BpTreeIterator::new_at_key(meta.root_page_id, start_key);
+                let index_executor = Box::new(IndexScanExecutor::new(
+                    iterator,
+                    scan_type,
+                    search_key,
+                    op,
+                    schema.clone(),
+                ));
+                return Ok(index_executor);
+            }
         }
         let iterator = BpTreeIterator::new(primary_root_id);
         Ok(Box::new(SeqScanExecutor::new(iterator, schema.clone())))
@@ -222,7 +264,7 @@ impl<'a> Planner<'a> {
     fn compute_table_reference_schema(&self, table_ref: &TableReference) -> Result<Schema, Error> {
         match table_ref {
             TableReference::BaseTable { name, alias } => {
-                let mut schema = self.catalog.get_table_schema(name)?.clone();
+                let mut schema = self.catalog.table_schema(name)?.clone();
                 let effective_name = alias.as_ref().unwrap_or(name).clone();
                 for col in &mut schema.columns {
                     col.table_name = Some(effective_name.clone());
@@ -408,7 +450,7 @@ impl<'a> Planner<'a> {
             // This lets us use user provided aliases and we infer the datatype from the schema.
             // For numbers, its not needed we differentiate between INT and BIGINT in the output
             // schema if it can't be inferred from the schema so we just use BIGINT.
-            output_cols.push(Column::new(None, col_name, data_type, None));
+            output_cols.push(Column::new(None, col_name, data_type, None, false));
             emit_exprs.push(bound_expr);
         }
         // Build the projection layer and the potentially aliased output schema.
@@ -442,7 +484,7 @@ impl<'a> Planner<'a> {
     /// pipeline. Confirms the validity of the statement and handles implicit NULL
     /// padding for intentionally omitted columns.
     fn plan_insert(&self, stmt: Insert) -> Result<QueryPlan, Error> {
-        let schema = self.catalog.get_table_schema(&stmt.table_name)?;
+        let schema = self.catalog.table_schema(&stmt.table_name)?;
 
         // If the query omitted the column list (Ex: INSERT INTO users VALUE ...;).
         // We automatically target all the columns in their schema order.
@@ -495,7 +537,7 @@ impl<'a> Planner<'a> {
     /// Translates the Ast Delete node into a physical `SeqScan -> Filter -> Delete` pipeline.
     /// Binds the optional where predicate if present.
     fn plan_delete(&self, stmt: Delete) -> Result<QueryPlan, Error> {
-        let schema = self.catalog.get_table_schema(&stmt.table_name)?;
+        let schema = self.catalog.table_schema(&stmt.table_name)?;
 
         // Bind the where clause early so we can use it for building the optimal pipeline.
         let bound_predicate = match stmt.where_clause {
@@ -526,7 +568,7 @@ impl<'a> Planner<'a> {
     /// Translates the Ast Update node into a physical `SeqScan -> Filter -> Update` pipeline.
     /// Performs type checking on all the SET assignments against the schema.
     fn plan_update(&self, stmt: Update) -> Result<QueryPlan, Error> {
-        let schema = self.catalog.get_table_schema(&stmt.table_name)?;
+        let schema = self.catalog.table_schema(&stmt.table_name)?;
 
         // Bind the where clause early so we can use it for building the optimal pipeline.
         let bound_predicate = match stmt.where_clause {

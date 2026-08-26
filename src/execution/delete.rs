@@ -31,20 +31,12 @@ impl Executor for DeleteExecutor {
         let row_id = tuple.row_id.ok_or_else(|| {
             Error::CorruptPage("Tuple passed to DeleteExecutor is missing row_id".into())
         })?;
-        let primary_root_id = ctx
-            .catalog
-            .read()
-            .get_table_root(&self.table_name)?;
+        let primary_root_id = ctx.catalog.read().get_table_root(&self.table_name)?;
 
         let primary_tree = BpTree::new(ctx.buffer_pool, primary_root_id);
         primary_tree.delete_record(row_id, ctx.txn_id)?;
 
-        let Some(indexes) = ctx
-            .catalog
-            .read()
-            .get_table_indexes(&self.table_name)
-            .cloned()
-        else {
+        let Some(indexes) = ctx.catalog.read().table_indexes(&self.table_name).cloned() else {
             return Ok(Some(tuple));
         };
         for (_, index_meta) in indexes {

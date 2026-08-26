@@ -7,22 +7,23 @@ use crate::relation::{
 /// This tracks the `root_page_id` for every table in the database and also keeps
 /// track of the last inserted row_id.
 #[rustfmt::skip]
-pub fn sys_pages_schema() -> Schema {
+pub fn sys_roots_schema() -> Schema {
     Schema::new(vec![
-        Column::new(Some("sys_pages"), "table_name", DataType::Varchar, Some(255)),
-        Column::new(Some("sys_pages"), "root_page_id", DataType::BigInt, None),
+        Column::new(Some("sys_pages"), "table_name", DataType::Varchar, Some(255), false),
+        Column::new(Some("sys_pages"), "root_page_id", DataType::BigInt, None, false),
     ])
 }
 
 /// Generates the hardcoded schema for `sys_schema` catalog.
 /// This tracks the columns layout for every user-created table.
 #[rustfmt::skip]
-pub fn sys_schema_schema() -> Schema {
+pub fn sys_tables_schema() -> Schema {
     Schema::new(vec![
-        Column::new(Some("sys_schema"), "table_name", DataType::Varchar, Some(255)),
-        Column::new(Some("sys_schema"), "field_name", DataType::Varchar, Some(255)),
-        Column::new(Some("sys_schema"), "field_type", DataType::Int, None),
-        Column::new(Some("sys_schema"), "field_length", DataType::Int, None),
+        Column::new(Some("sys_schema"), "table_name", DataType::Varchar, Some(255), false),
+        Column::new(Some("sys_schema"), "field_name", DataType::Varchar, Some(255), false),
+        Column::new(Some("sys_schema"), "field_type", DataType::Int, None, false),
+        Column::new(Some("sys_schema"), "field_length", DataType::Int, None, false),
+        Column::new(Some("sys_schema"), "is_primary_key", DataType::Boolean, None, false),
     ])
 }
 
@@ -31,10 +32,10 @@ pub fn sys_schema_schema() -> Schema {
 #[rustfmt::skip]
 pub fn sys_index_schema() -> Schema {
     Schema::new(vec![
-        Column::new(Some("sys_index"), "index_name", DataType::Varchar, Some(255)),
-        Column::new(Some("sys_index"), "table_name", DataType::Varchar, Some(255)),
-        Column::new(Some("sys_index"), "column_name", DataType::Varchar, Some(255)),
-        Column::new(Some("sys_index"), "is_unique", DataType::Boolean, None),
-        Column::new(Some("sys_index"), "root_page_id", DataType::BigInt, None),
+        Column::new(Some("sys_index"), "index_name", DataType::Varchar, Some(255), false),
+        Column::new(Some("sys_index"), "table_name", DataType::Varchar, Some(255), false),
+        Column::new(Some("sys_index"), "column_name", DataType::Varchar, Some(255), false),
+        Column::new(Some("sys_index"), "is_unique", DataType::Boolean, None, false),
+        Column::new(Some("sys_index"), "root_page_id", DataType::BigInt, None, false),
     ])
 }

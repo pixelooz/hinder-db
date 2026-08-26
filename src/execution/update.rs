@@ -53,10 +53,7 @@ impl Executor for UpdateExecutor {
             let new_value = Evaluator::evaluate(&exec_assign.expr, &old_tuple)?;
             new_tuple.values[exec_assign.col_idx] = new_value;
         }
-        let primary_root_id = ctx
-            .catalog
-            .read()
-            .get_table_root(&self.table_name)?;
+        let primary_root_id = ctx.catalog.read().get_table_root(&self.table_name)?;
 
         let primary_tree = BpTree::new(ctx.buffer_pool, primary_root_id);
         ctx.block_buffer.clear();
@@ -67,12 +64,7 @@ impl Executor for UpdateExecutor {
         let payload = ctx.block_buffer.clone();
         primary_tree.update(row_id, payload, ctx.txn_id)?;
 
-        let Some(indexes) = ctx
-            .catalog
-            .read()
-            .get_table_indexes(&self.table_name)
-            .cloned()
-        else {
+        let Some(indexes) = ctx.catalog.read().table_indexes(&self.table_name).cloned() else {
             return Ok(Some(new_tuple));
         };
         for (_, index_meta) in indexes {

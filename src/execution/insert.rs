@@ -3,13 +3,17 @@ use std::io::Cursor;
 use crate::{
     error::Error,
     execution::{ExecutionContext, Executor},
-    relation::{schema::Schema, tuple::Tuple},
+    relation::{
+        schema::Schema,
+        tuple::Tuple,
+        types::{DataType, Value},
+    },
     storage::bptree::BpTree,
 };
 
-/// A physical mutation executor that inserts tuples into the database. It pulls tuples
-/// from its child, generates a monotonic primary key, writes the encoded tuples to the
-/// primary BTree, and updates all associated secondary indexes.
+/// A record mutation executor that inserts tuples into the database. It pulls tuples
+/// from its child, generates a monotonic primary key if not given, writes the encoded
+/// tuples to the primary BTree, and updates all associated secondary indexes.
 pub struct InsertExecutor {
     /// The child operator yielding the tuples to be inserted.
     child: Box<dyn Executor>,
@@ -32,10 +36,52 @@ impl InsertExecutor {
 
 impl Executor for InsertExecutor {
     fn next(&mut self, ctx: &mut ExecutionContext) -> Result<Option<Tuple>, Error> {
-        let Some(tuple) = self.child.next(ctx)? else {
+        let Some(mut tuple) = self.child.next(ctx)? else {
             return Ok(None);
         };
-        let next_row_id = ctx.catalog.read().generate_next_row_id(&self.table_name)?;
+        let mut explicit_row_id = None;
+
+        if let Some(pk_idx) = self.schema.primary_key_idx {
+            match &tuple.values[pk_idx] {
+                Value::Null => {
+                    // User omitted the primary key, so we auto generate it and insert.
+                    let row_id = ctx.catalog.read().generate_next_row_id(&self.table_name)?;
+                    let col_type = self.schema.columns[pk_idx].data_type;
+                    tuple.values[pk_idx] = match col_type {
+                        DataType::BigInt => Value::BigInt(row_id as i64),
+                        DataType::Int => Value::Int(row_id as i32),
+                        _ => unreachable!(
+                            "wrong pk_type should've been caught at schema declaration"
+                        ),
+                    };
+                    explicit_row_id = Some(row_id);
+                }
+                Value::Int(val) => {
+                    let row_id = *val as u64;
+                    explicit_row_id = Some(row_id);
+                    ctx.catalog
+                        .read()
+                        .update_high_watermark(&self.table_name, row_id)?;
+                }
+                Value::BigInt(val) => {
+                    let row_id = *val as u64;
+                    explicit_row_id = Some(row_id);
+                    ctx.catalog
+                        .read()
+                        .update_high_watermark(&self.table_name, row_id)?;
+                }
+                _ => {
+                    return Err(Error::SyntaxErr(format!(
+                        "PRIMARY KEY must be INT or BIGINT. found {:?}",
+                        tuple.values[pk_idx],
+                    )));
+                }
+            }
+        }
+        let next_row_id = match explicit_row_id {
+            Some(row_id) => row_id,
+            None => ctx.catalog.read().generate_next_row_id(&self.table_name)?,
+        };
         let primary_root_id = ctx.catalog.read().get_table_root(&self.table_name)?;
 
         let primary_tree = BpTree::new(ctx.buffer_pool, primary_root_id);
@@ -47,12 +93,7 @@ impl Executor for InsertExecutor {
         let payload = ctx.block_buffer.clone();
         primary_tree.insert(next_row_id, payload, ctx.txn_id)?;
 
-        let Some(indexes) = ctx
-            .catalog
-            .read()
-            .get_table_indexes(&self.table_name)
-            .cloned()
-        else {
+        let Some(indexes) = ctx.catalog.read().table_indexes(&self.table_name).cloned() else {
             return Ok(Some(tuple));
         };
         for (_, index_meta) in indexes {

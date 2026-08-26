@@ -70,9 +70,7 @@ impl Executor for IndexScanExecutor {
                 continue;
             }
             // Pull the next key payload from the indexed payload.
-            let Some(index_key) = self
-                .iterator
-                .next(ctx.buffer_pool, &mut ctx.block_buffer)?
+            let Some(index_key) = self.iterator.next(ctx.buffer_pool, &mut ctx.block_buffer)?
             else {
                 return Ok(None);
             };

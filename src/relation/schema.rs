@@ -9,20 +9,27 @@ pub struct Column {
     pub name: String,
     pub data_type: DataType,
     pub length: Option<u32>,
+    pub is_primary_key: bool,
 }
 
 impl Column {
     /// Creates an initialized Column with the given parameters.
-    #[rustfmt::skip]
-    pub fn new<T>(table_name: Option<T>, name: T, data_type: DataType, length: Option<u32>) -> Self
+    pub fn new<T>(
+        table_name: Option<T>,
+        name: T,
+        data_type: DataType,
+        length: Option<u32>,
+        is_primary_key: bool,
+    ) -> Self
     where
-        T: Into<String>
+        T: Into<String>,
     {
         Self {
             table_name: table_name.map(Into::into),
             name: name.into(),
             data_type,
             length,
+            is_primary_key,
         }
     }
 }
@@ -31,12 +38,17 @@ impl Column {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Schema {
     pub columns: Vec<Column>,
+    pub primary_key_idx: Option<usize>,
 }
 
 impl Schema {
     /// Creates an initialized Schema with the given columns.
     pub fn new(columns: Vec<Column>) -> Self {
-        Self { columns }
+        let primary_key_idx = columns.iter().position(|col| col.is_primary_key);
+        Self {
+            columns,
+            primary_key_idx,
+        }
     }
 
     /// Finds the index of a column by its string name.
