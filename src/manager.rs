@@ -151,6 +151,11 @@ impl CatalogManager {
     pub fn table_schemas(&self) -> &HashMap<String, Schema> {
         &self.table_schemas
     }
+
+    /// Returns a reference to index roots.
+    pub fn index_roots(&self) -> &HashMap<String, HashMap<String, IndexMeta>> {
+        &self.index_roots
+    }
 }
 
 impl CatalogManager {

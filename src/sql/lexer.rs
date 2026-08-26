@@ -62,6 +62,7 @@ impl<'a> Lexer<'a> {
             "DATABASE" => Token::Database,
             "DATABASES" => Token::Databases,
             "INDEX" => Token::Index,
+            "INDEXES" => Token::Indexes,
             "UNIQUE" => Token::Unique,
             "ON" => Token::On,
             "COMMIT" => Token::Commit,

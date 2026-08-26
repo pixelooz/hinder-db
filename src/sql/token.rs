@@ -23,6 +23,7 @@ pub enum Token {
     Show,
     Drop,
     Index,
+    Indexes,
     Unique,
     On,
     Commit,

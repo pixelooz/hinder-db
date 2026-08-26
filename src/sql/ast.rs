@@ -23,6 +23,7 @@ pub enum Statement {
 
     DropTable(String),
     ShowTables,
+    ShowIndexes,
 }
 
 /// Components of a SELECT statement and its derivatives.

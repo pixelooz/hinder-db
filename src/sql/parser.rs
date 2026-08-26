@@ -183,13 +183,16 @@ impl<'a> Parser<'a> {
             }
             Token::Show => {
                 self.advance()?;
-                if self.consume(&Token::Tables).is_err() {
-                    return Err(Error::SyntaxErr(format!(
-                        "expected TABLES or DATABASES after SHOW, found {:?}",
-                        self.curr_token,
-                    )));
+                if self.match_token(&Token::Indexes)? {
+                    return Ok(Statement::ShowIndexes);
                 }
-                Ok(Statement::ShowTables)
+                if self.match_token(&Token::Tables)? {
+                    return Ok(Statement::ShowTables);
+                }
+                Err(Error::SyntaxErr(format!(
+                    "expected TABLES, INDEXES or DATABASES after SHOW, found {:?}",
+                    self.curr_token,
+                )))
             }
             _ => Err(Error::SyntaxErr(format!(
                 "unexpected token at start of statement: {:?}",

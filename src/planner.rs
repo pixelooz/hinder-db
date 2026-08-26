@@ -14,7 +14,8 @@ use crate::{
         join::BlockNestedLoopJoinExecutor,
         limit::LimitOffsetExecutor,
         seq_scan::SeqScanExecutor,
-        show::ShowTablesExecutor,
+        show_indexes::ShowIndexesExecutor,
+        show_tables::ShowTablesExecutor,
         sort::SortExecutor,
         update::{ExecAssignment, UpdateExecutor},
         value::ValuesExecutor,
@@ -82,6 +83,19 @@ impl<'a> Planner<'a> {
                 let schema = Schema::new(vec![column]);
                 Ok(QueryPlan {
                     executor: Box::new(ShowTablesExecutor::new()),
+                    schema,
+                    is_query: true,
+                })
+            }
+            ShowIndexes => {
+                let schema = Schema::new(vec![
+                    Column::new(None, "table_name", DataType::Varchar, None, false),
+                    Column::new(None, "index_name", DataType::Varchar, None, false),
+                    Column::new(None, "column_name", DataType::Varchar, None, false),
+                    Column::new(None, "is_unique", DataType::Boolean, None, false),
+                ]);
+                Ok(QueryPlan {
+                    executor: Box::new(ShowIndexesExecutor::new()),
                     schema,
                     is_query: true,
                 })
