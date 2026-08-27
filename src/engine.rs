@@ -107,7 +107,7 @@ impl<'a> Connection<'a> {
 
     /// Executes a single already parsed Ast statement. It manages transaction boundaries,
     /// auto-commits, and volcano pipeline.
-    pub fn execute_statement(&mut self, stmt: Statement) -> Result<ResultSet, Error> {
+    fn execute_statement(&mut self, stmt: Statement) -> Result<ResultSet, Error> {
         match stmt {
             Statement::Commit => return self.handle_commit(),
             Statement::Begin => return self.handle_begin(),
@@ -203,5 +203,109 @@ impl<'a> Connection<'a> {
             return Err(Error::ActionNotAllowed("No active transaction".into()));
         }
         Ok(ResultSet::Mutation { rows_affected: 0 })
+    }
+}
+
+fn print_table_results(results: Vec<ResultSet>) {
+    for result in results {
+        match result {
+            ResultSet::Query { rows, schema } => {
+                if rows.is_empty() {
+                    println!("Empty set");
+                    return;
+                }
+                let mut col_width: Vec<usize> =
+                    schema.columns.iter().map(|col| col.name.len()).collect();
+
+                let mut formatted_rows = Vec::with_capacity(rows.len());
+
+                for row in &rows {
+                    let mut string_row = Vec::with_capacity(row.values.len());
+                    for (i, val) in row.values.iter().enumerate() {
+                        let str_val = val.to_string();
+
+                        if str_val.len() > col_width[i] {
+                            col_width[i] = str_val.len();
+                        }
+                        string_row.push(str_val);
+                    }
+                    formatted_rows.push(string_row);
+                }
+                // Helper closure to draw horizontal separators.
+                let print_separator = || {
+                    print!("+");
+                    for width in &col_width {
+                        print!("{}+", "-".repeat(*width + 2));
+                    }
+                    println!();
+                };
+                // Start printing the table.
+                print_separator();
+
+                // Print header
+                print!("|");
+                for (i, col) in schema.columns.iter().enumerate() {
+                    print!(" {:width$} |", col.name, width = col_width[i]);
+                }
+                println!();
+                print_separator();
+
+                // Print rows
+                for row in formatted_rows {
+                    print!("|");
+                    for (i, val_str) in row.iter().enumerate() {
+                        print!(" {:width$} |", val_str, width = col_width[i]);
+                    }
+                    println!();
+                }
+                print_separator();
+                println!("{} rows in set", rows.len());
+            }
+            _ => unreachable!(""),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::engine::{Database, print_table_results};
+    use std::fs;
+
+    fn setup_path(name: &str) -> (String, String) {
+        let db_path = format!("/Volumes/External T7/{}_test.db", name);
+        let wal_path = format!("/Volumes/External T7/{}_test.wal", name);
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_file(&wal_path);
+        (db_path, wal_path)
+    }
+
+    #[test]
+    fn debugging_function() {
+        let (db_path, wal_path) = setup_path("debugging");
+        let db = Database::open(db_path, wal_path, 100).expect("db open failed");
+        let mut conn = db.connect();
+
+        let mut query = "Create Table users(id Int Primary Key, name Varchar(255), acc_id Int);";
+        conn.execute_batch(query).expect("users execution failed");
+
+        query = "Create Table accounts(id Int Primary Key, name Varchar(255), money BigInt);";
+        conn.execute_batch(query)
+            .expect("accounts execution failed");
+
+        query = "Insert Into users (name, acc_id) Values ('parth', 1), ('juhi', 2)";
+        conn.execute_batch(query).expect("inserting users failed");
+
+        query = "Insert Into accounts (name, money) Values ('p_acc', 100), ('j_acc', 1000);";
+        conn.execute_batch(query)
+            .expect("inserting accounts failed");
+
+        query = "
+            Select u.id, u.name, a.name, a.money
+            From users As u Left Join accounts As a On u.acc_id = a.id
+            Where a.money <= 1000
+            Order By a.money Desc
+            ";
+        let results = conn.execute_batch(query).expect("select failed");
+        print_table_results(results);
     }
 }

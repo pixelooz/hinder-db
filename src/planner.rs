@@ -453,18 +453,22 @@ impl<'a> Planner<'a> {
                 inferred_type,
                 aggregate_ctx.as_ref(),
             )?;
-            let col_name = derived_cols
-                .alias
-                .unwrap_or_else(|| match derived_cols.expr {
-                    Expr::Column(col_ref) => col_ref.column_name,
-                    _ => format!("col_{}", idx),
-                });
-            let data_type = inferred_type.unwrap_or(DataType::BigInt);
-
             // This lets us use user provided aliases and we infer the datatype from the schema.
             // For numbers, its not needed we differentiate between INT and BIGINT in the output
             // schema if it can't be inferred from the schema so we just use BIGINT.
-            output_cols.push(Column::new(None, col_name, data_type, None, false));
+            if let Some(col_name) = derived_cols.alias {
+                let data_type = inferred_type.unwrap_or(DataType::BigInt);
+                let column = Column::new(None, col_name, data_type, None, false);
+                output_cols.push(column);
+            } else {
+                let data_type = inferred_type.unwrap_or(DataType::BigInt);
+                let col = match derived_cols.expr {
+                    Expr::Column(col_ref) => (col_ref.qualifier, col_ref.column_name),
+                    _ => (None, format!("col_{}", idx)),
+                };
+                let column = Column::new(col.0, col.1, data_type, None, false);
+                output_cols.push(column);
+            }
             emit_exprs.push(bound_expr);
         }
         // Build the projection layer and the potentially aliased output schema.
