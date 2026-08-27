@@ -51,7 +51,7 @@ fn main() {
 
     match cli.commands {
         Commands::Show => {
-            match handle_show_database(&base_dir) {
+            match collect_db_names(&base_dir) {
                 Ok(list) => {
                     print_lists(list);
                 }
@@ -60,9 +60,19 @@ fn main() {
             return;
         }
         Commands::Repl => {}
-        Commands::Use { db_name } => {
-            current_db = db_name;
-        }
+        Commands::Use { db_name } => match collect_db_names(&base_dir) {
+            Ok(list) => {
+                if list.iter().any(|name| name == &db_name) {
+                    current_db = db_name;
+                } else {
+                    eprintln!(
+                        "Database '{}' does not exists. Choosing default.\n",
+                        db_name
+                    );
+                }
+            }
+            Err(err) => eprintln!("{}", err),
+        },
         Commands::DbHelp => {
             show_help();
             return;
@@ -98,7 +108,7 @@ fn main() {
                 // Handle meta commands.
                 if query_buffer.is_empty() && line.starts_with('.') {
                     match line.to_uppercase().as_str() {
-                        ".DATABASES" => match handle_show_database(&base_dir) {
+                        ".DATABASES" => match collect_db_names(&base_dir) {
                             Ok(list) => {
                                 print_lists(list);
                                 continue;
@@ -181,7 +191,7 @@ fn main() {
                 } else {
                     let upper_query = upper_query.trim_end_matches(';').trim();
                     if matches!(upper_query, "SHOW DATABASES") {
-                        match handle_show_database(&base_dir) {
+                        match collect_db_names(&base_dir) {
                             Ok(list) => {
                                 print_lists(list);
                             }
@@ -267,7 +277,7 @@ fn open_database(base_dir: &str, name: &str) -> Result<Database> {
 }
 
 /// Helper to collect the list of database names.
-fn handle_show_database(base_dir: &str) -> Result<Vec<String>> {
+fn collect_db_names(base_dir: &str) -> Result<Vec<String>> {
     let mut databases = Vec::new();
     for entry in fs::read_dir(base_dir)? {
         let path = entry?.path();

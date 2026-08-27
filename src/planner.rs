@@ -224,23 +224,25 @@ impl<'a> Planner<'a> {
         if let Some(predicate) = bound_predicate
             && let Some((col_idx, op, value)) = self.extract_predicate(predicate)
         {
-            let search_key = match value {
-                Value::BigInt(val) => val as u64,
-                Value::Int(val) => val as u64,
-                _ => {
-                    return Err(Error::SyntaxErr(format!(
-                        "PRIMARY KEY must be INT or BIGINT, found: {:?}",
-                        value
-                    )));
-                }
-            };
-            let start_key = match op {
-                BinaryOperator::Eq | BinaryOperator::Gt | BinaryOperator::Gte => Some(search_key),
-                BinaryOperator::Lt | BinaryOperator::Lte => None, // Start at the leftmost leaf.
-                _ => unreachable!("OR and AND should not have been encountered."),
-            };
             // Check if the predicate (where clause) targets the primary_key.
             if Some(col_idx) == schema.primary_key_idx {
+                let search_key = match value {
+                    Value::BigInt(val) => val as u64,
+                    Value::Int(val) => val as u64,
+                    _ => {
+                        return Err(Error::SyntaxErr(format!(
+                            "PRIMARY KEY must be INT or BIGINT, found: {:?}",
+                            value
+                        )));
+                    }
+                };
+                let start_key = match op {
+                    BinaryOperator::Eq | BinaryOperator::Gt | BinaryOperator::Gte => {
+                        Some(search_key)
+                    }
+                    BinaryOperator::Lt | BinaryOperator::Lte => None, // Start at the leftmost leaf.
+                    _ => unreachable!("OR and AND should not have been encountered."),
+                };
                 let scan_type = IndexType::Primary;
                 let iterator = BpTreeIterator::new_at_key(primary_root_id, start_key);
                 let index_executor = Box::new(IndexScanExecutor::new(
@@ -254,6 +256,11 @@ impl<'a> Planner<'a> {
             }
             let col_name = &schema.columns[col_idx].name;
             let search_key = value.to_index_key();
+            let start_key = match op {
+                BinaryOperator::Eq | BinaryOperator::Gt | BinaryOperator::Gte => Some(search_key),
+                BinaryOperator::Lt | BinaryOperator::Lte => None, // Start at the leftmost leaf.
+                _ => unreachable!("OR and AND should not have been encountered."),
+            };
             if let Some(indexes) = self.catalog.table_indexes(table_name)
                 && let Some(meta) = indexes.values().find(|im| im.column_name == *col_name)
             {
