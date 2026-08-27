@@ -111,7 +111,7 @@ impl<'a> Planner<'a> {
     fn plan_create_table(&self, stmt: CreateTable) -> Result<QueryPlan, Error> {
         let mut columns = Vec::with_capacity(stmt.columns.len());
 
-        for col_def in &stmt.columns {
+        for col_def in stmt.columns {
             if col_def.is_primary_key
                 && !matches!(col_def.data_type, DataType::BigInt | DataType::Int)
             {
@@ -120,8 +120,6 @@ impl<'a> Planner<'a> {
                     col_def.data_type
                 )));
             }
-        }
-        for col_def in stmt.columns {
             columns.push(Column::new(
                 None,
                 col_def.name,
@@ -226,7 +224,7 @@ impl<'a> Planner<'a> {
         {
             // Check if the predicate (where clause) targets the primary_key.
             if Some(col_idx) == schema.primary_key_idx {
-                let search_key = match value {
+                let primary_key = match value {
                     Value::BigInt(val) => val as u64,
                     Value::Int(val) => val as u64,
                     _ => {
@@ -238,7 +236,7 @@ impl<'a> Planner<'a> {
                 };
                 let start_key = match op {
                     BinaryOperator::Eq | BinaryOperator::Gt | BinaryOperator::Gte => {
-                        Some(search_key)
+                        Some(primary_key)
                     }
                     BinaryOperator::Lt | BinaryOperator::Lte => None, // Start at the leftmost leaf.
                     _ => unreachable!("OR and AND should not have been encountered."),
@@ -248,16 +246,16 @@ impl<'a> Planner<'a> {
                 let index_executor = Box::new(IndexScanExecutor::new(
                     iterator,
                     scan_type,
-                    search_key,
+                    primary_key,
                     op,
                     schema.clone(),
                 ));
                 return Ok(index_executor);
             }
             let col_name = &schema.columns[col_idx].name;
-            let search_key = value.to_index_key();
+            let index_key = value.to_index_key();
             let start_key = match op {
-                BinaryOperator::Eq | BinaryOperator::Gt | BinaryOperator::Gte => Some(search_key),
+                BinaryOperator::Eq | BinaryOperator::Gt | BinaryOperator::Gte => Some(index_key),
                 BinaryOperator::Lt | BinaryOperator::Lte => None, // Start at the leftmost leaf.
                 _ => unreachable!("OR and AND should not have been encountered."),
             };
@@ -269,7 +267,7 @@ impl<'a> Planner<'a> {
                 let index_executor = Box::new(IndexScanExecutor::new(
                     iterator,
                     scan_type,
-                    search_key,
+                    index_key,
                     op,
                     schema.clone(),
                 ));
