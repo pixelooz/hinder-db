@@ -43,6 +43,11 @@ pub enum AstLiteral {
     String(String),
     Int(i64),
     Boolean(bool),
+
+    /// I will add Null and Not Null column types in the future so this
+    /// will serve as reminder. Right now the parser doesn't construct
+    /// Nulls.
+    #[allow(dead_code)]
     Null,
 }
 
@@ -70,6 +75,7 @@ impl<'a> Parser<'a> {
         mem::discriminant(&self.curr_token) == mem::discriminant(expected)
     }
 
+    #[allow(dead_code)]
     /// Checks if the peek token matches the expected variant.
     fn check_peek(&self, expected: &Token) -> bool {
         mem::discriminant(&self.peek_token) == mem::discriminant(expected)

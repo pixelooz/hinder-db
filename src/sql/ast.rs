@@ -2,7 +2,7 @@ use crate::{relation::types::DataType, sql::parser::AstLiteral};
 
 // TODO: After writing the binder layer see if the 'Strings' can be used as '&str'
 
-/// The top-leve root of any parsed SQL query; by returning this enum the parser
+/// The top-level root of any parsed SQL query; by returning this enum the parser
 /// guarantees, the execution engine knows exactly what type of command to route.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
@@ -18,7 +18,6 @@ pub enum Statement {
     CreateTable(CreateTable),
     CreateIndex(CreateIndex),
 
-    ShowDatabases,
     UseDatabase(String),
 
     DropTable(String),
@@ -121,7 +120,7 @@ pub enum JoinType {
     Right,
 }
 
-/// A recursvie tree representing mathematical and boolean logic.
+/// A recursive tree representing mathematical and boolean logic.
 ///
 /// # Note For me
 /// Equivalent of Expr in the compiler book. Later compare it

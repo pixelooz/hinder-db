@@ -82,8 +82,21 @@ impl BackgroundFlusher {
             // One final checkpoint before shutting down to prevent wal bloat
             // between reboots.
             if pool.can_checkpoint() {
-                let _ = pool.flush_all_pages();
-                let _ = pool.get_wal_manager().lock().truncate();
+                if let Err(err) = pool.flush_all_pages() {
+                    eprintln!(
+                        "CRITICAL: shutdown flush failed: {:?}. Wal will be used for recovery.",
+                        err
+                    );
+                } else {
+                    let wal_manager = pool.get_wal_manager();
+                    let mut wal_guard = wal_manager.lock();
+                    if let Err(err) = wal_guard.truncate() {
+                        eprintln!(
+                            "CRITICAL: Wal truncation failed during shutdown: {:?}.",
+                            err
+                        );
+                    }
+                }
             }
         });
         Self {

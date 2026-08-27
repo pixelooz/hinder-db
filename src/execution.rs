@@ -37,7 +37,7 @@ pub struct ExecutionContext<'a> {
     /// The concurrent table-access manager that provides read/write access
     /// to executors ensuring no two write threads have access to a table at
     /// the same time.
-    pub lock_manager: &'a LockManager,
+    pub _lock_manager: &'a LockManager,
 
     /// The unique transaction id grouping all operations in this query.
     ///
@@ -56,13 +56,13 @@ impl<'a> ExecutionContext<'a> {
     pub fn new(
         pool: &'a BufferPool,
         catalog: &'a RwLock<CatalogManager>,
-        lock_manager: &'a LockManager,
+        _lock_manager: &'a LockManager,
         txn_id: u64,
     ) -> Self {
         Self {
             buffer_pool: pool,
             catalog,
-            lock_manager,
+            _lock_manager,
             block_buffer: Vec::with_capacity(2048),
             txn_id,
         }

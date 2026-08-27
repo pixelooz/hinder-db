@@ -113,11 +113,8 @@ impl Executor for IndexScanExecutor {
                 }
                 IndexType::Secondary { .. } => {
                     let mut primary_row_ids = Vec::new();
-                    for chunk in ctx.block_buffer.chunks_exact(8) {
-                        let enc_chunk: [u8; 8] = chunk.try_into().map_err(|_| {
-                            Error::CorruptPage("invalid primary-key list chunk-length".into())
-                        })?;
-                        let stored_id = u64::from_le_bytes(enc_chunk);
+                    for enc_chunk in ctx.block_buffer.as_chunks::<8>().0 {
+                        let stored_id = u64::from_le_bytes(*enc_chunk);
                         primary_row_ids.push(stored_id);
                     }
                     self.primary_row_ids = primary_row_ids.into_iter();

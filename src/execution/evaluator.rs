@@ -2,7 +2,7 @@ use crate::{
     error::Error,
     planner::bound_expr::BoundExpr,
     relation::{tuple::Tuple, types::Value},
-    sql::{ast::BinaryOperator, parser::AstLiteral},
+    sql::ast::BinaryOperator,
 };
 
 /// A stateless engine that computes the expressions of the SQL we've parsed.
@@ -33,16 +33,6 @@ impl Evaluator {
                 Self::eval_binary_op(&left_val, *op, &right_val)
             }
             BoundExpr::Constant(val) => Ok(val.clone()),
-        }
-    }
-
-    /// Temporary stub
-    fn eval_literal(lit: &AstLiteral) -> Value {
-        match lit {
-            AstLiteral::String(val) => Value::Varchar(val.clone()),
-            AstLiteral::Int(val) => Value::BigInt(*val),
-            AstLiteral::Boolean(val) => Value::Boolean(*val),
-            AstLiteral::Null => Value::Null,
         }
     }
 

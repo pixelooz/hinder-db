@@ -18,7 +18,8 @@ use crate::{
     relation::{schema::Schema, tuple::Tuple},
     sql::{ast::Statement, lexer::Lexer, parser::Parser},
     storage::{
-        buffer_pool::BufferPool, flusher::BackgroundFlusher, page::DiskManager, wal::WalManager,
+        buffer_pool::BufferPool, flusher::BackgroundFlusher, page::DiskManager,
+        recovery::RecoveryEngine, wal::WalManager,
     },
 };
 
@@ -52,8 +53,9 @@ impl Database {
         P: AsRef<Path>,
     {
         let disk_manager = DiskManager::open(db_path)?;
-        let wal_manager = Arc::new(Mutex::new(WalManager::open(wal_path)?));
+        RecoveryEngine::init(&wal_path, &disk_manager)?;
 
+        let wal_manager = Arc::new(Mutex::new(WalManager::open(wal_path)?));
         let buffer_pool = BufferPool::new(disk_manager, pool_cap, wal_manager.clone());
 
         // run the recovery engine here
@@ -206,6 +208,9 @@ impl<'a> Connection<'a> {
     }
 }
 
+/// Its supposed to be used in test where you want to just create some tables and see
+/// their output and clean them without having to interact with the repl.
+#[allow(dead_code)]
 fn print_table_results(results: Vec<ResultSet>) {
     for result in results {
         match result {

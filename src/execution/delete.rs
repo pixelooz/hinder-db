@@ -49,13 +49,10 @@ impl Executor for DeleteExecutor {
                 let mut new_row_ids = Vec::with_capacity(existing_row_ids.len());
 
                 // Filter out the target row_id from the id list.
-                for chunk in existing_row_ids.chunks_exact(8) {
-                    let enc_chunk: [u8; 8] = chunk.try_into().map_err(|_| {
-                        Error::CorruptPage("invalid primary-key list chunk-length".into())
-                    })?;
-                    let stored_id = u64::from_le_bytes(enc_chunk);
+                for enc_chunk in existing_row_ids.as_chunks::<8>().0 {
+                    let stored_id = u64::from_le_bytes(*enc_chunk);
                     if stored_id != row_id {
-                        new_row_ids.extend_from_slice(chunk);
+                        new_row_ids.extend_from_slice(enc_chunk);
                     }
                 }
                 if new_row_ids.is_empty() {

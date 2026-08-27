@@ -50,6 +50,7 @@ impl LruReplacer {
         }
     }
 
+    #[allow(dead_code)]
     /// Returns the size of the current replacer.
     pub fn size(&self) -> usize {
         self.pages.len()
@@ -133,22 +134,6 @@ impl LruReplacer {
         }
     }
 
-    /// Removes and returns the least recently used `PageId` from the Lru replacer.
-    /// Returns `None` if the replacer is empty.
-    ///
-    /// # Caution
-    /// Could be removed later from the API.
-    pub fn evict(&mut self) -> Option<PageId> {
-        let t_idx = self.tail_idx?;
-        let page_id = self.arena[t_idx].page_id;
-
-        self.unlink(t_idx);
-        self.pages.remove(&page_id);
-        self.free_list.push(t_idx);
-
-        Some(page_id)
-    }
-
     /// Yields up to `limit` PageIds from the Lru tail without unlinking them or
     /// modifying their recency position.
     pub fn peek_rev(&self, limit: usize) -> Vec<PageId> {
@@ -198,12 +183,25 @@ mod tests {
     use super::*;
     use crate::storage::page::PageId;
 
+    /// Removes and returns the least recently used `PageId` from the Lru replacer.
+    /// Returns `None` if the replacer is empty.
+    pub fn evict(lru: &mut LruReplacer) -> Option<PageId> {
+        let t_idx = lru.tail_idx?;
+        let page_id = lru.arena[t_idx].page_id;
+
+        lru.unlink(t_idx);
+        lru.pages.remove(&page_id);
+        lru.free_list.push(t_idx);
+
+        Some(page_id)
+    }
+
     /// Validates that an empty replacer correctly returns `None` on eviction
     /// without panicking.
     #[test]
     fn test_empty_replacer_evicts_none() {
         let mut lru = LruReplacer::new(5);
-        assert_eq!(lru.evict(), None);
+        assert_eq!(evict(&mut lru), None);
     }
 
     /// Verifies the core LRU invariant: pages are evicted in the exact order
@@ -215,10 +213,10 @@ mod tests {
         lru.record_access(PageId(20));
         lru.record_access(PageId(30));
 
-        assert_eq!(lru.evict(), Some(PageId(10)));
-        assert_eq!(lru.evict(), Some(PageId(20)));
-        assert_eq!(lru.evict(), Some(PageId(30)));
-        assert_eq!(lru.evict(), None);
+        assert_eq!(evict(&mut lru), Some(PageId(10)));
+        assert_eq!(evict(&mut lru), Some(PageId(20)));
+        assert_eq!(evict(&mut lru), Some(PageId(30)));
+        assert_eq!(evict(&mut lru), None);
     }
 
     /// Ensures accessing an already-tracked page promotes it to MRU (head),
@@ -233,10 +231,10 @@ mod tests {
         // Access Page 1 again; order should shift from [1, 2, 3] (LRU->MRU) to [2, 3, 1]
         lru.record_access(PageId(1));
 
-        assert_eq!(lru.evict(), Some(PageId(2)));
-        assert_eq!(lru.evict(), Some(PageId(3)));
-        assert_eq!(lru.evict(), Some(PageId(1)));
-        assert_eq!(lru.evict(), None);
+        assert_eq!(evict(&mut lru), Some(PageId(2)));
+        assert_eq!(evict(&mut lru), Some(PageId(3)));
+        assert_eq!(evict(&mut lru), Some(PageId(1)));
+        assert_eq!(evict(&mut lru), None);
     }
 
     /// Validates boundary pointer rewires when removing head, tail, or middle
@@ -256,9 +254,9 @@ mod tests {
         dbg!(&lru.arena);
 
         // Remaining LRU order should be 30 then 40
-        assert_eq!(lru.evict(), Some(PageId(30)));
-        assert_eq!(lru.evict(), Some(PageId(40)));
-        assert_eq!(lru.evict(), None);
+        assert_eq!(evict(&mut lru), Some(PageId(30)));
+        assert_eq!(evict(&mut lru), Some(PageId(40)));
+        assert_eq!(evict(&mut lru), None);
     }
 
     /// Ensures that removing a non-existent PageId is a safe no-op that does
@@ -269,8 +267,8 @@ mod tests {
         lru.record_access(PageId(1));
         lru.remove(PageId(999)); // Should not panic or alter state
 
-        assert_eq!(lru.evict(), Some(PageId(1)));
-        assert_eq!(lru.evict(), None);
+        assert_eq!(evict(&mut lru), Some(PageId(1)));
+        assert_eq!(evict(&mut lru), None);
     }
 
     /// Verifies arena memory reuse: evicted slots must be pushed to `free_list`
@@ -283,7 +281,7 @@ mod tests {
         assert_eq!(lru.arena.len(), 2);
 
         // Eviction should populate the free_list
-        lru.evict();
+        evict(&mut lru);
         assert_eq!(lru.free_list.len(), 1);
 
         // Next access should claim the free slot instead of growing the arena vector
@@ -302,7 +300,7 @@ mod tests {
 
         // Re-accessing the single item shouldn't break head == tail
         lru.record_access(PageId(100));
-        assert_eq!(lru.evict(), Some(PageId(100)));
+        assert_eq!(evict(&mut lru), Some(PageId(100)));
         assert_eq!(lru.head_idx, None);
         assert_eq!(lru.tail_idx, None);
     }

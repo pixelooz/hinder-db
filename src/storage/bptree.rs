@@ -111,6 +111,7 @@ impl<'a> BpTree<'a> {
         }
     }
 
+    #[allow(dead_code)]
     /// Returns the active root PageId.
     pub fn get_root_id(&self) -> PageId {
         self.root_page_id

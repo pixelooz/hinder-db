@@ -136,19 +136,6 @@ pub struct InternalNode {
 }
 
 impl InternalNode {
-    /// Returns true if the node has been modified in memory since being loaded
-    /// from disk.
-    pub fn is_dirty(&self) -> bool {
-        self.is_dirty
-    }
-
-    /// Clears the dirty flag, signifying the node to be unmodified. Must be
-    /// called immediately after the Buffer Pool successfully write the page
-    /// to the disk.
-    pub fn clear_dirty(&mut self) {
-        self.is_dirty = false
-    }
-
     /// Marks the node as dirty :) hehe, and updates its last (LSN).
     pub fn mark_dirty(&mut self) {
         self.is_dirty = true;
@@ -301,19 +288,6 @@ pub struct LeafNode {
 }
 
 impl LeafNode {
-    /// Returns true if the node has been modified in memory since being loaded
-    /// from disk.
-    pub fn is_dirty(&self) -> bool {
-        self.is_dirty
-    }
-
-    /// Clears the dirty flag, signifying the node to be unmodified. Must be
-    /// called immediately after the Buffer Pool successfully write the page
-    /// to the disk.
-    pub fn clear_dirty(&mut self) {
-        self.is_dirty = false
-    }
-
     /// Marks the node as dirty :) hehe, and updates its last (LSN).
     pub fn mark_dirty(&mut self) {
         self.is_dirty = true;
@@ -630,31 +604,19 @@ impl<'a> ByteCursor<'a> {
     }
 
     fn read_u16(&mut self) -> u16 {
-        let val = u16::from_le_bytes(
-            self.buffer[self.pos..self.pos + 2]
-                .try_into()
-                .unwrap(),
-        );
+        let val = u16::from_le_bytes(self.buffer[self.pos..self.pos + 2].try_into().unwrap());
         self.pos += 2;
         val
     }
 
     fn read_u32(&mut self) -> u32 {
-        let val = u32::from_le_bytes(
-            self.buffer[self.pos..self.pos + 4]
-                .try_into()
-                .unwrap(),
-        );
+        let val = u32::from_le_bytes(self.buffer[self.pos..self.pos + 4].try_into().unwrap());
         self.pos += 4;
         val
     }
 
     fn read_u64(&mut self) -> u64 {
-        let val = u64::from_le_bytes(
-            self.buffer[self.pos..self.pos + 8]
-                .try_into()
-                .unwrap(),
-        );
+        let val = u64::from_le_bytes(self.buffer[self.pos..self.pos + 8].try_into().unwrap());
         self.pos += 8;
         val
     }
@@ -889,10 +851,7 @@ impl DiskManager {
     pub fn is_empty(&self) -> bool {
         // If the next free offset is exact the size of the 0th page, that means
         // no user or system page has been allocated.
-        (PAGE_SIZE as u64).eq(&self
-            .header
-            .next_free_offset
-            .load(Ordering::Acquire))
+        (PAGE_SIZE as u64).eq(&self.header.next_free_offset.load(Ordering::Acquire))
     }
 
     /// Reads exactly one 4KB block from the physical disk into a `Page` buffer,
@@ -900,15 +859,13 @@ impl DiskManager {
     /// file.
     pub fn read_page(&self, page_id: &PageId) -> Result<Page, Error> {
         let mut page = Page::new();
-        self.file
-            .read_exact_at(page.as_bytes_mut(), page_id.0)?;
+        self.file.read_exact_at(page.as_bytes_mut(), page_id.0)?;
         Ok(page)
     }
 
     /// Flushes a 4KB `Page` buffer directly to disk at the specified `PageId` offset.
     pub fn write_page(&self, page_id: PageId, page: &Page) -> Result<(), Error> {
-        self.file
-            .write_all_at(page.as_bytes(), page_id.0)?;
+        self.file.write_all_at(page.as_bytes(), page_id.0)?;
         Ok(())
     }
 
@@ -931,11 +888,7 @@ impl DiskManager {
 
         cursor.write_u64(self.header.page_root_offset);
         cursor.write_u64(self.header.next_lsn);
-        cursor.write_u64(
-            self.header
-                .next_free_offset
-                .load(Ordering::Relaxed),
-        );
+        cursor.write_u64(self.header.next_free_offset.load(Ordering::Relaxed));
 
         self.file.write_all_at(&buffer, 0)?;
         self.file.sync_all()?;
@@ -1216,19 +1169,14 @@ mod tests {
             let mut dm = DiskManager::open(&path)?;
             dm.header.page_root_offset = 8192;
             dm.header.next_lsn = 1000;
-            dm.header
-                .next_free_offset
-                .store(16384, Ordering::Release);
+            dm.header.next_free_offset.store(16384, Ordering::Release);
             dm.save_header()?;
         }
         let dm_reopened = DiskManager::open(&path)?;
         assert_eq!(dm_reopened.header.page_root_offset, 8192);
         assert_eq!(dm_reopened.header.next_lsn, 1000);
         assert_eq!(
-            dm_reopened
-                .header
-                .next_free_offset
-                .load(Ordering::Acquire),
+            dm_reopened.header.next_free_offset.load(Ordering::Acquire),
             16384
         );
         remove_file(path)?;

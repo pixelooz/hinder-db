@@ -455,7 +455,7 @@ impl<'a> Planner<'a> {
             )?;
             // This lets us use user provided aliases and we infer the datatype from the schema.
             // For numbers, its not needed we differentiate between INT and BIGINT in the output
-            // schema if it can't be inferred from the schema so we just use BIGINT.
+            // schema, if it can't be inferred from the schema we just use BIGINT.
             if let Some(col_name) = derived_cols.alias {
                 let data_type = inferred_type.unwrap_or(DataType::BigInt);
                 let column = Column::new(None, col_name, data_type, None, false);
