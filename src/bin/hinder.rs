@@ -62,7 +62,7 @@ fn main() {
         Commands::Repl => {}
         Commands::Use { db_name } => match collect_db_names(&base_dir) {
             Ok(list) => {
-                if list.iter().any(|name| name == &db_name) {
+                if list.iter().any(|name| name == &db_name.to_uppercase()) {
                     current_db = db_name;
                 } else {
                     eprintln!(
