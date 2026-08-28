@@ -55,8 +55,8 @@ This means a single 8KiB internal page can hold about ~450 pointers, meaning:
 So, to find a specific user out of 9 billion, the database only traverses 4 levels. Because the Root and Level 2 pages are almost always
 hot in the Buffer Pool's cache, a primary key lookup for 1 in 9 billion rows requires only 1 or 2 physical disk reads.
 
-Furthermore because the leaf pages utilize binary search, and the structure is a B+Tree, an index lookup takes about 40-60µs on a 500k 
-row dataset. Not too bad for a project database. 
+Furthermore because the leaf pages utilize binary search, and the structure is a B+Tree, an index lookup takes about 40-60 microseconds 
+on a 500,000 row dataset. Not too bad for a project database. 
 
 ## Why I Built This
 
