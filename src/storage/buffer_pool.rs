@@ -122,9 +122,7 @@ impl BufferPool {
         let node = BTreeNode::decode(&raw_page)?;
         let frame = Arc::new(RwLock::new(node));
 
-        self.page_table
-            .write()
-            .insert(page_id, frame.clone());
+        self.page_table.write().insert(page_id, frame.clone());
 
         self.replacer.lock().record_access(page_id);
         Ok(frame)
@@ -140,9 +138,7 @@ impl BufferPool {
         let node = BTreeNode::new_empty(page_id, is_leaf);
         let frame = Arc::new(RwLock::new(node));
 
-        self.page_table
-            .write()
-            .insert(page_id, frame.clone());
+        self.page_table.write().insert(page_id, frame.clone());
 
         self.replacer.lock().record_access(page_id);
         Ok((page_id, frame))
@@ -337,13 +333,14 @@ impl BufferPool {
                     BTreeNode::Leaf(node) => node.wal_offset,
                 };
                 let flushed = self.get_wal_manager().lock().flushed_offset();
+                /* TODO: explain the wal_offset field's purpose in the architecture decisions
+                as it might be confusing why even use this? */
                 if wal_offset > flushed {
                     self.wal_manager.lock().sync()?;
                 }
                 let mut raw_page = Page::new();
                 node_guard.encode(&mut raw_page)?;
-                self.disk_manager
-                    .write_page(evict_id, &raw_page)?;
+                self.disk_manager.write_page(evict_id, &raw_page)?;
                 node_guard.with_upgraded(|node| node.clear_dirty());
             }
         }

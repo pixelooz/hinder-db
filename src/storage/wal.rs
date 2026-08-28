@@ -152,8 +152,7 @@ impl WalManager {
     pub fn sync(&mut self) -> Result<(), Error> {
         self.file.sync_all()?;
         let offset = self.file.seek(SeekFrom::End(0))?;
-        self.flushed_offset
-            .store(offset, Ordering::Release);
+        self.flushed_offset.store(offset, Ordering::Release);
         Ok(())
     }
 
