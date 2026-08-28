@@ -18,11 +18,11 @@ similar operations that are *not* basic CRUD (limitations, hehe).
 
 #### General Queries with JOINs and AGGREGATES
 
-<!--![General Queries](./assets/showcase.gif)-->
+![General Queries](./assets/showcase.gif)
 
 #### Transactions with ROLLBACK and COMMIT (add crash recovery also in the gif)
 
-<!--![Transactional Queries](./assets/transactions.gif)-->
+![Transactional Queries](./assets/transactions.gif)
 
 > More examples in [Demo.md](Demo.md)
 
@@ -53,9 +53,10 @@ This means a single 8KiB internal page can hold about ~450 pointers, meaning:
 **Level-4 (Leaf):** Stores about 91,125,000 pages × 100 rows = 9.1 Billion Records.
 
 So, to find a specific user out of 9 billion, the database only traverses 4 levels. Because the Root and Level 2 pages are almost always
-hot in the Buffer Pool's cache, a primary key lookup for 1 in 9 billion rows requires only 1 or 2 physical disk reads and that too with
-binary search, given its an index search - I compared it a while ago, but the index lookup takes about 40-60µs on a 500k row dataset.
-Not too bad for a project database.
+hot in the Buffer Pool's cache, a primary key lookup for 1 in 9 billion rows requires only 1 or 2 physical disk reads.
+
+Furthermore because the leaf pages utilize binary search, and the structure is a B+Tree, an index lookup lookup takes about 40-60µs on a 
+500k row dataset. Not too bad for a project database. 
 
 ## Why I Built This
 
@@ -75,7 +76,7 @@ learning from sources like the book **Database Internals**, or lectures from **C
 ## Brief Look at the Architecture
 
 I built HinderDb accounting for High ROI, meaning I've chosen to stick with the actual architectural patterns for most of the things, 
-however they have been relatively simplified so I don't loose my sanity while writing this project. An example of that would be: instead
+however they have been relatively simplified so I don't lose my sanity while writing this project. An example of that would be: instead
 of using HashJoins which is the fastest method of handling joins (production databases do this), I've chosen Block Nested Loop Joins, 
 which is the second fastest method of handling Joins (production databases do this too), ***but***, it's all in-memory, an actual 
 database would spill to disk if things go out of hand while running Joins, we don't (what is this? a real database?). 
@@ -171,5 +172,5 @@ for the next couple of months there is no fixed timeline when these additions ha
 ## Current Roadmap (In no particular order)
 
 * **Concurrency Control:** Table-Level Two-Phase Locking (2PL) via the `LockManager` to support multithreaded clients.
-* **Garbage Collection:** Equivalent of the `VACCUM` command to reclaim disk space from logical tombstones and rewriting the entire 
+* **Garbage Collection:** Equivalent of the `VACUUM` command to reclaim disk space from logical tombstones and rewriting the entire 
 page anew.
