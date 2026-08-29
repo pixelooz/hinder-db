@@ -86,7 +86,7 @@ which is the second fastest method of handling Joins (production databases do th
 database would spill to disk if things go out of hand while running Joins, we don't (what is this? a real database?). 
 
 So these are the kinds of simplifications we are working with. Below you can see some brief architectural decisions, for a more detailed
-account, read [Architecture.md](Architecture.md):
+account, read [Architecture.md](Architecture.md)(Will take some time writing this. After I'm finished with my prep most likely.):
 
 #### Execution Engine (Volcano Iterator Model)
 * **Zero Allocation Scans:** Iterators write raw bytes directly into a reusable `&mut Vec<u8>` **block_buffer** to avoid heap allocation
