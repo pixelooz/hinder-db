@@ -20,7 +20,11 @@ similar operations that are *not* basic CRUD (limitations, hehe).
 
 ![General Queries](./assets/showcase.gif)
 
-#### Transactions with ROLLBACK and COMMIT (add crash recovery also in the gif)
+#### Crash Recovery 
+
+![Crash Recovery](./assets/crash_recovery.gif)
+
+#### Transactions with ROLLBACK and COMMIT 
 
 ![Transactional Queries](./assets/transactions.gif)
 
@@ -101,6 +105,12 @@ to this internal ID at no extra cost.
 * **Secondary Indexes:** B+Trees that store arrays of primary **row_id**s for every secondary key like 'alice'. I used sign-bit flipping
 for the numeric types so that the B+Tree sorts them correctly; the strings are hashed.
 
+#### Parser & Lexer
+* **Recursive Descent Parser:** Wrote customer lexer and a LL(1) recursive descent parser to define custom syntax rules and provide exact
+syntax error messages.
+* **Single-Pass Planning:** The parsed Ast is fed directly into the `Planner`, which performs semantic validation, type-checking, and 
+physical routing (Index vs. Seq Scan) in a single pass, outputting a ready-to-run Volcano execution pipeline.
+
 #### Transactions and Durability
 * **Write-Ahead Log (Wal):** Uses STEAL/NO-FORCE style logging protocol, and per page undo/redo mechanism like SQLite on COMMIT/ROLLBACKS 
 and also on crash recovery.
@@ -140,8 +150,10 @@ CREATE TABLE posts (post_id INT PRIMARY KEY, author_id INT, title VARCHAR(100));
 CREATE INDEX idx_posts_author ON posts (author_id);
 
 BEGIN;
-INSERT INTO users VALUES (1, 'Alice', 500), (2, 'Bob', 120);
-INSERT INTO posts VALUES (101, 1, 'Building a Database in Rust'), (102, 1, 'B+ Tree Mechanics');
+INSERT INTO users 
+    VALUES (1, 'Alice', 500), (2, 'Bob', 120);
+INSERT INTO posts 
+    VALUES (101, 1, 'Building a Database in Rust'), (102, 1, 'B+ Tree Mechanics');
 COMMIT;
 
 SELECT u.name, COUNT(p.post_id) AS total_posts 
@@ -150,15 +162,6 @@ LEFT JOIN posts AS p ON u.id = p.author_id
 GROUP BY u.name 
 ORDER BY total_posts DESC;
 ```
-## Documentation & Architecture
-
-If you want to know in more detail how the internals actually work and the process of building this db, checkout the documentation 
-mentioned below.
-
-* [**ARCHITECTURE.md**](./ARCHITECTURE.md) - A deep dive into the page layout, B+Tree operations, Buffer Pool mechanics, how 
-the execution engine works, and a look into the entire life of a query.
-* [**NOTES.md**](./NOTES.md) - A more of a personal notes I've been maintaining on the side regarding some decisions, things
-I was unsure about and what I ended up with, rough ideas that I didn't want to forget and should look into them later, etc.
 
 ## What's the Future? 
 
@@ -172,5 +175,6 @@ for the next couple of months there is no fixed timeline when these additions ha
 ## Current Roadmap (In no particular order)
 
 * **Concurrency Control:** Table-Level Two-Phase Locking (2PL) via the `LockManager` to support multithreaded clients.
-* **Garbage Collection:** Equivalent of the `VACUUM` command to reclaim disk space from logical tombstones and rewriting the entire 
+* **Garbage Collection:** Equivalent of the `VACUUM` command to reclaim disk space from logical tombstones and rewrite the entire 
 page anew.
+* **ARCHITECTURE.md:** Write a markdown file to break down the architecture in detail.
