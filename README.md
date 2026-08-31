@@ -28,8 +28,6 @@ similar operations that are *not* basic CRUD (limitations, hehe).
 
 ![Transactional Queries](./assets/transactions.gif)
 
-> More examples in [Demo.md](Demo.md)
-
 ## A Small Behind The Scenes
 
 So, if you were to create a table with: `CREATE TABLE users (id INT, is_active BOOLEAN, account_balance BIGINT, username VARCHAR(40));`
