@@ -135,6 +135,11 @@ cargo install --path .
 
 # Start the REPL by running:
 hinder repl # This should open the default database.
+
+# If you don't want to install and just run from the directory.
+cargo run --bin hinder repl
+... >> .help # Shows db usage patterns.
+
 # Create a new database.
 ... >> CREATE DATABASE my_database;
 ... >> USE my_database;
